@@ -104,6 +104,7 @@ export const FftSpectrumView: React.FC<FftSpectrumViewProps> = ({
 
   // Adaptive Y-axis configuration:
   // Peaks always appear at 90% of Y-axis height (maxAmp = maxObservedAmp / 0.9)
+  // 0.02 단위까지 세분화하여 주파수 특성을 명확히 표시
   const yAxisConfig = useMemo(() => {
     let step = 0.2;
     let maxAmp = 1.0;
@@ -112,35 +113,37 @@ export const FftSpectrumView: React.FC<FftSpectrumViewProps> = ({
       step = parseFloat(yScalePreset);
       maxAmp = Math.max(step * 3, Math.ceil((maxObservedAmp / 0.9) / step) * step);
     } else {
-      // Automatic adaptive subdivision based on vibration magnitude:
-      // maxAmp is always set so that maxObservedAmp maps to 90% of plot height
-      if (maxObservedAmp <= 0.35) {
+      // Automatic adaptive subdivision: finer steps (down to 0.02) so peaks render near 90%
+      if (maxObservedAmp <= 0.1) {
+        step = 0.02;
+        maxAmp = Math.max(0.06, Math.ceil((maxObservedAmp / 0.9) / 0.02) * 0.02);
+      } else if (maxObservedAmp <= 0.35) {
+        step = 0.05;
+        maxAmp = Math.max(0.15, Math.ceil((maxObservedAmp / 0.9) / 0.05) * 0.05);
+      } else if (maxObservedAmp <= 1.1) {
         step = 0.1;
         maxAmp = Math.max(0.3, Math.ceil((maxObservedAmp / 0.9) / 0.1) * 0.1);
-      } else if (maxObservedAmp <= 1.1) {
+      } else if (maxObservedAmp <= 2.4) {
         step = 0.2;
         maxAmp = Math.max(0.6, Math.ceil((maxObservedAmp / 0.9) / 0.2) * 0.2);
-      } else if (maxObservedAmp <= 2.4) {
+      } else if (maxObservedAmp <= 6.0) {
         step = 0.5;
         maxAmp = Math.max(1.5, Math.ceil((maxObservedAmp / 0.9) / 0.5) * 0.5);
-      } else if (maxObservedAmp <= 6.0) {
+      } else if (maxObservedAmp <= 14.0) {
         step = 1.0;
         maxAmp = Math.max(3.0, Math.ceil((maxObservedAmp / 0.9) / 1.0) * 1.0);
-      } else if (maxObservedAmp <= 14.0) {
+      } else if (maxObservedAmp <= 35.0) {
         step = 2.0;
         maxAmp = Math.max(8.0, Math.ceil((maxObservedAmp / 0.9) / 2.0) * 2.0);
-      } else if (maxObservedAmp <= 35.0) {
+      } else {
         step = 5.0;
         maxAmp = Math.max(15.0, Math.ceil((maxObservedAmp / 0.9) / 5.0) * 5.0);
-      } else {
-        step = 10.0;
-        maxAmp = Math.max(40.0, Math.ceil((maxObservedAmp / 0.9) / 10.0) * 10.0);
       }
     }
 
     const ticks: number[] = [];
     const numSteps = Math.round(maxAmp / step);
-    const decimals = step < 0.2 ? 2 : step < 1 ? 1 : 0;
+    const decimals = step < 0.05 ? 2 : step < 1 ? 1 : 0;
     for (let i = 0; i <= numSteps; i++) {
       ticks.push(+(i * step).toFixed(decimals));
     }
