@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#090d16" />
+      <stop offset="50%" stop-color="#0f172a" />
+      <stop offset="100%" stop-color="#1e293b" />
+    </linearGradient>
+    <linearGradient id="cyanGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#38bdf8" />
+      <stop offset="100%" stop-color="#06b6d4" />
+    </linearGradient>
+    <linearGradient id="bladeGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#f59e0b" />
+      <stop offset="100%" stop-color="#ef4444" />
+    </linearGradient>
+    <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="6" result="blur" />
+      <feComposite in="SourceGraphic" in2="blur" operator="over" />
+    </filter>
+  </defs>
+
+  <!-- Background rounded rectangle -->
+  <rect width="512" height="512" rx="100" fill="url(#bgGrad)" stroke="#334155" stroke-width="6"/>
+
+  <!-- Radar / Circular Frequency Grid -->
+  <circle cx="256" cy="220" r="150" fill="none" stroke="#1e293b" stroke-width="2" stroke-dasharray="6,6"/>
+  <circle cx="256" cy="220" r="100" fill="none" stroke="#334155" stroke-width="2" opacity="0.6"/>
+  <circle cx="256" cy="220" r="50" fill="none" stroke="#475569" stroke-width="1.5" opacity="0.8"/>
+
+  <!-- Helicopter Rotor Blade 1 & 2 -->
+  <g transform="rotate(35 256 220)">
+    <!-- Blade 1 -->
+    <path d="M 256 205 L 430 212 C 450 213, 450 227, 430 228 L 256 235 Z" fill="url(#bladeGrad)" opacity="0.9" />
+    <!-- Blade 2 -->
+    <path d="M 256 205 L 82 212 C 62 213, 62 227, 82 228 L 256 235 Z" fill="url(#bladeGrad)" opacity="0.9" />
+    <!-- Rotor Hub & Swashplate -->
+    <circle cx="256" cy="220" r="32" fill="#0f172a" stroke="#f59e0b" stroke-width="4" />
+    <circle cx="256" cy="220" r="16" fill="#f8fafc" />
+    <circle cx="256" cy="220" r="6" fill="#0f172a" />
+  </g>
+
+  <!-- FFT Vibration Frequency Waveform at bottom -->
+  <path d="M 64 430 Q 110 430 130 400 T 170 430 T 210 380 T 256 310 T 290 410 T 330 360 T 370 430 T 448 430" 
+        fill="none" stroke="url(#cyanGrad)" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" filter="url(#glow)"/>
+
+  <!-- FFT Peak Dots -->
+  <circle cx="256" cy="310" r="7" fill="#38bdf8" />
+  <circle cx="330" cy="360" r="5" fill="#06b6d4" />
+
+  <!-- Harmonic 1P & Tail Label Badges -->
+  <rect x="236" y="278" width="40" height="22" rx="4" fill="#0369a1" />
+  <text x="256" y="294" fill="#e0f2fe" font-size="13" font-weight="bold" font-family="sans-serif" text-anchor="middle">1P</text>
+  <rect x="312" y="328" width="36" height="22" rx="4" fill="#b45309" />
+  <text x="330" y="344" fill="#fef3c7" font-size="12" font-weight="bold" font-family="sans-serif" text-anchor="middle">Tail</text>
+</svg>

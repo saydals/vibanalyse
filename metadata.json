@@ -1,0 +1,6 @@
+{
+  "name": "Rotorflight Blackbox Vibration Analyzer",
+  "description": "Rotorflight RC 헬리콥터 블랙박스(BBL) 데이터 로드 및 고성능 FFT 진동 분석, RPM 고조파 및 필터 튜닝 진단 웹앱",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
