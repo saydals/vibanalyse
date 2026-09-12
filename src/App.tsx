@@ -48,12 +48,14 @@ export default function App() {
     const sample = REAL_SAMPLES.find(s => s.id === sampleId) ?? DEFAULT_SAMPLE;
     setSampleError(null);
     try {
+      console.log('[loadRealSample] Fetching:', sample.file);
       const loaded = await fetchSampleLogs(sample);
+      console.log('[loadRealSample] Loaded:', loaded.length, 'logs, first:', loaded[0]?.filename);
       setLogs(loaded);
       setCurrentLogIndex(0);
       setShowUploaderModal(false);
     } catch (e: any) {
-      console.error(e);
+      console.error('[loadRealSample] Error:', e);
       setSampleError(e?.message || '샘플 로그를 불러오지 못했습니다.');
     }
   }, []);
@@ -84,6 +86,7 @@ export default function App() {
   // When log changes, update window and detected RPM
   useEffect(() => {
     if (currentLog && isRotorflight) {
+      console.log('[useEffect] Setting selectedWindow:', { start: 0, end: currentLog.durationSec });
       setSelectedWindow({ start: 0, end: currentLog.durationSec });
       setCurrentTimeSec(Math.min(currentLog.durationSec, 3.5));
 
@@ -128,7 +131,9 @@ export default function App() {
 
   // Compute Overall Vibration Summary (only if Rotorflight)
   const vibrationSummary = useMemo<VibrationSummary>(() => {
+    console.log('[vibrationSummary] currentLog:', currentLog?.filename, 'isRotorflight:', isRotorflight, 'logTooShort:', logTooShort, 'selectedWindow:', selectedWindow);
     if (!currentLog || !isRotorflight) {
+      console.log('[vibrationSummary] Early return: !currentLog || !isRotorflight');
       return {
         gyroRms: { roll: 0, pitch: 0, yaw: 0, overall: 0 },
         accRms: { x: 0, y: 0, z: 0, overall: 0 },
@@ -141,6 +146,7 @@ export default function App() {
       };
     }
     if (logTooShort) {
+      console.log('[vibrationSummary] Early return: logTooShort');
       return {
         gyroRms: { roll: 0, pitch: 0, yaw: 0, overall: 0 },
         accRms: { x: 0, y: 0, z: 0, overall: 0 },
@@ -157,7 +163,9 @@ export default function App() {
         }],
       };
     }
-    return analyzeVibrations(currentLog, heliConfig, selectedWindow);
+    const result = analyzeVibrations(currentLog, heliConfig, selectedWindow);
+    console.log('[vibrationSummary] analyzeVibrations result:', result.gyroRms);
+    return result;
   }, [currentLog, heliConfig, isRotorflight, logTooShort, selectedWindow]);
 
   const handleLogLoaded = (newLogs: BlackboxLog[]) => {

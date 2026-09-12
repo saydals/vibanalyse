@@ -50,14 +50,14 @@ export const REAL_SAMPLES: RealSample[] = [
     description: '450급 플라이바. 자이로/가속도/헤드스피드가 모두 기록된 실전 로그.',
   },
   {
-    id: 'raw500',
-    file: 'RAW500_20260412_075944_Brownout.bbl',
-    title: 'RAW 500 (Brownout)',
-    craft: 'SAB RAW 500',
-    tag: '브라운아웃 포함',
+    id: 'rtflblackbox',
+    file: 'RTFL_BLACKBOX_LOG_20260815_192644.BBL',
+    title: 'Rotorflight Blackbox',
+    craft: 'Rotorflight BBL',
+    tag: '실전 블랙박스 로그',
     accent: 'rose',
-    meta: 'Rotorflight 4.5 · 398Hz · 283초',
-    description: '비행 중 전원 브라운아웃이 포함된 로그. 이상 구간 판별 연습용.',
+    meta: 'Rotorflight 4.5 · 995Hz · 357초',
+    description: '실전 비행에서 기록된 정품 Rotorflight BBL 로그. 완전한 데이터 세트 포함.',
   },
 ];
 
@@ -71,10 +71,15 @@ export function sampleUrl(file: string): string {
 
 /** Fetch + parse a bundled real .bbl sample with the real parser. */
 export async function fetchSampleLogs(sample: RealSample): Promise<BlackboxLog[]> {
-  const res = await fetch(sampleUrl(sample.file));
+  const url = sampleUrl(sample.file);
+  console.log('[fetchSampleLogs] URL:', url);
+  const res = await fetch(url);
+  console.log('[fetchSampleLogs] Status:', res.status);
   if (!res.ok) throw new Error(`샘플 로그 다운로드 실패 (HTTP ${res.status})`);
   const buf = await res.arrayBuffer();
+  console.log('[fetchSampleLogs] Buffer size:', buf.byteLength);
   const result = await parseBlackboxFile(buf, sample.file);
+  console.log('[fetchSampleLogs] Parsed logs:', result.logs.length);
   if (result.logs.length === 0) throw new Error('샘플 로그에서 유효한 비행 데이터를 찾을 수 없습니다.');
   return result.logs;
 }
