@@ -1208,18 +1208,27 @@ export function analyzeVibrations(
   const n1 = window ? Math.max(n0 + 1, Math.min(n, Math.ceil(window.endSec * log.sampleRateHz))) : n;
 
   // 1. Calculate RMS vibration
-  const calcRms = (data: Float32Array): number => {
+  const calcRms = (data: Float32Array | undefined): number => {
+    if (!data || data.length === 0) return 0;
     let sumSq = 0;
-    // Remove DC mean
+    let validCount = 0;
+    // Remove DC mean using valid values only
     let sum = 0;
-    for (let i = n0; i < n1; i++) sum += data[i];
-    const mean = sum / (n1 - n0);
-
-    for (let i = n0; i < n1; i++) {
-      const diff = data[i] - mean;
-      sumSq += diff * diff;
+    for (let i = n0; i < n1 && i < data.length; i++) {
+      if (Number.isFinite(data[i])) sum += data[i];
     }
-    return Math.sqrt(sumSq / (n1 - n0));
+    const count = Math.max(1, n1 - n0);
+    const mean = sum / count;
+
+    for (let i = n0; i < n1 && i < data.length; i++) {
+      if (Number.isFinite(data[i])) {
+        const diff = data[i] - mean;
+        sumSq += diff * diff;
+        validCount++;
+      }
+    }
+    if (validCount === 0) return 0;
+    return Math.sqrt(sumSq / validCount);
   };
 
   const rollRms = calcRms(log.gyro.roll);
@@ -1236,10 +1245,13 @@ export function analyzeVibrations(
   let maxRoll = 0;
   let maxPitch = 0;
   let maxYaw = 0;
-  for (let i = n0; i < n1; i++) {
-    if (Math.abs(log.gyro.roll[i]) > maxRoll) maxRoll = Math.abs(log.gyro.roll[i]);
-    if (Math.abs(log.gyro.pitch[i]) > maxPitch) maxPitch = Math.abs(log.gyro.pitch[i]);
-    if (Math.abs(log.gyro.yaw[i]) > maxYaw) maxYaw = Math.abs(log.gyro.yaw[i]);
+  for (let i = n0; i < n1 && i < log.gyro.roll.length; i++) {
+    const r = log.gyro.roll[i];
+    if (Number.isFinite(r) && Math.abs(r) > maxRoll) maxRoll = Math.abs(r);
+    const p = log.gyro.pitch[i];
+    if (Number.isFinite(p) && Math.abs(p) > maxPitch) maxPitch = Math.abs(p);
+    const y = log.gyro.yaw[i];
+    if (Number.isFinite(y) && Math.abs(y) > maxYaw) maxYaw = Math.abs(y);
   }
 
   // 2. Estimate Head Speed RPM (within analysis window)
