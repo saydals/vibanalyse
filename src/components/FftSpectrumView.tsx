@@ -103,39 +103,38 @@ export const FftSpectrumView: React.FC<FftSpectrumViewProps> = ({
   }, [fft, maxFreqRange, skipHz, showRoll, showPitch, showYaw, showAcc]);
 
   // Adaptive Y-axis configuration:
-  // Subdivides into 0.2°/s units if vibration is low, or 1.0°/s units if vibration is large
+  // Peaks always appear at 90% of Y-axis height (maxAmp = maxObservedAmp / 0.9)
   const yAxisConfig = useMemo(() => {
     let step = 0.2;
     let maxAmp = 1.0;
 
     if (yScalePreset !== 'auto') {
       step = parseFloat(yScalePreset);
-      maxAmp = Math.max(step * 3, Math.ceil((maxObservedAmp * 1.15) / step) * step);
+      maxAmp = Math.max(step * 3, Math.ceil((maxObservedAmp / 0.9) / step) * step);
     } else {
       // Automatic adaptive subdivision based on vibration magnitude:
+      // maxAmp is always set so that maxObservedAmp maps to 90% of plot height
       if (maxObservedAmp <= 0.35) {
         step = 0.1;
-        maxAmp = Math.max(0.3, Math.ceil((maxObservedAmp * 1.25) / 0.1) * 0.1);
+        maxAmp = Math.max(0.3, Math.ceil((maxObservedAmp / 0.9) / 0.1) * 0.1);
       } else if (maxObservedAmp <= 1.1) {
-        // Low vibration: 0.2°/s unit as explicitly requested
         step = 0.2;
-        maxAmp = Math.max(0.6, Math.ceil((maxObservedAmp * 1.2) / 0.2) * 0.2);
+        maxAmp = Math.max(0.6, Math.ceil((maxObservedAmp / 0.9) / 0.2) * 0.2);
       } else if (maxObservedAmp <= 2.4) {
         step = 0.5;
-        maxAmp = Math.max(1.5, Math.ceil((maxObservedAmp * 1.18) / 0.5) * 0.5);
+        maxAmp = Math.max(1.5, Math.ceil((maxObservedAmp / 0.9) / 0.5) * 0.5);
       } else if (maxObservedAmp <= 6.0) {
-        // Moderate/large vibration: 1.0°/s unit as explicitly requested
         step = 1.0;
-        maxAmp = Math.max(3.0, Math.ceil((maxObservedAmp * 1.15) / 1.0) * 1.0);
+        maxAmp = Math.max(3.0, Math.ceil((maxObservedAmp / 0.9) / 1.0) * 1.0);
       } else if (maxObservedAmp <= 14.0) {
         step = 2.0;
-        maxAmp = Math.max(8.0, Math.ceil((maxObservedAmp * 1.15) / 2.0) * 2.0);
+        maxAmp = Math.max(8.0, Math.ceil((maxObservedAmp / 0.9) / 2.0) * 2.0);
       } else if (maxObservedAmp <= 35.0) {
         step = 5.0;
-        maxAmp = Math.max(15.0, Math.ceil((maxObservedAmp * 1.15) / 5.0) * 5.0);
+        maxAmp = Math.max(15.0, Math.ceil((maxObservedAmp / 0.9) / 5.0) * 5.0);
       } else {
         step = 10.0;
-        maxAmp = Math.max(40.0, Math.ceil((maxObservedAmp * 1.15) / 10.0) * 10.0);
+        maxAmp = Math.max(40.0, Math.ceil((maxObservedAmp / 0.9) / 10.0) * 10.0);
       }
     }
 
