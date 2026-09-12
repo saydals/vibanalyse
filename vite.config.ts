@@ -6,6 +6,7 @@ import {VitePWA} from 'vite-plugin-pwa';
 
 export default defineConfig(() => {
   return {
+    base: '/vibanalyse/',
     plugins: [
       react(),
       tailwindcss(),
@@ -13,30 +14,30 @@ export default defineConfig(() => {
         registerType: 'autoUpdate',
         includeAssets: ['icon.svg', 'apple-touch-icon.png', 'pwa-192x192.png', 'pwa-512x512.png'],
         manifest: {
-          id: '/',
+          id: '/vibanalyse/',
           name: 'Rotorflight Blackbox Vibration Analyzer',
           short_name: 'RF Vibration',
           description: 'Rotorflight RC 헬리콥터 블랙박스(BBL) 데이터 로드 및 고성능 FFT 진동 분석 웹앱',
           theme_color: '#0f172a',
           background_color: '#020617',
           display: 'standalone',
-          start_url: '/',
-          scope: '/',
+          start_url: '/vibanalyse/',
+          scope: '/vibanalyse/',
           icons: [
             {
-              src: '/pwa-192x192.png',
+              src: '/vibanalyse/pwa-192x192.png',
               sizes: '192x192',
               type: 'image/png',
               purpose: 'any',
             },
             {
-              src: '/pwa-512x512.png',
+              src: '/vibanalyse/pwa-512x512.png',
               sizes: '512x512',
               type: 'image/png',
               purpose: 'any',
             },
             {
-              src: '/pwa-maskable-512x512.png',
+              src: '/vibanalyse/pwa-maskable-512x512.png',
               sizes: '512x512',
               type: 'image/png',
               purpose: 'maskable',

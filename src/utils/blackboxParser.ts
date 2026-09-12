@@ -34,6 +34,142 @@ function readSVarInt(bytes: Uint8Array, offsetObj: { offset: number }): number {
   return (u & 1) ? -(u >>> 1) - 1 : (u >>> 1);
 }
 
+// Rotorflight/BetaFlight event type constants (from flightlog_parser.js)
+const FLIGHT_LOG_EVENT = {
+    SYNC_BEEP: 0,
+    LOGGING_RESUME: 1,
+    FLIGHT_MODE: 10,
+    LOG_END: 11,
+    DISARM: 30,
+    INFLIGHT_ADJUSTMENT: 33,
+    CUSTOM_DATA: 34,
+    CUSTOM_STRING: 35,
+    GOVERNOR_STATE: 36,
+    RESCUE_STATE: 37,
+    AIRBORNE_STATE: 38,
+    LOG_END_255: 255,
+};
+
+const FLIGHT_EVENT_NAMES: Record<number, string> = {
+    [FLIGHT_LOG_EVENT.SYNC_BEEP]: 'Sync Beep',
+    [FLIGHT_LOG_EVENT.LOGGING_RESUME]: 'Logging Resume',
+    [FLIGHT_LOG_EVENT.FLIGHT_MODE]: 'Flight Mode',
+    [FLIGHT_LOG_EVENT.LOG_END]: 'End of Log',
+    [FLIGHT_LOG_EVENT.DISARM]: 'Disarm',
+    [FLIGHT_LOG_EVENT.INFLIGHT_ADJUSTMENT]: 'In-flight Adjustment',
+    [FLIGHT_LOG_EVENT.CUSTOM_DATA]: 'Custom Data',
+    [FLIGHT_LOG_EVENT.CUSTOM_STRING]: 'Custom String',
+    [FLIGHT_LOG_EVENT.GOVERNOR_STATE]: 'Governor State',
+    [FLIGHT_LOG_EVENT.RESCUE_STATE]: 'Rescue State',
+    [FLIGHT_LOG_EVENT.AIRBORNE_STATE]: 'Airborne State',
+};
+
+/**
+ * Parse a Rotorflight/BetaFlight event frame from binary data.
+ * Reads the event type and any associated data from the stream.
+ * Returns the event name, time in seconds, and whether the log should end.
+ */
+function parseEventFrame(
+    bytes: Uint8Array,
+    offsetObj: { offset: number },
+    lastMainFrameTimeUs: number
+): { name: string; timeSec: number; endOfLog: boolean } | null {
+    if (offsetObj.offset >= bytes.length) return null;
+
+    const eventType = bytes[offsetObj.offset++];
+    const eventName = FLIGHT_EVENT_NAMES[eventType] || `Event #${eventType}`;
+
+    let timeSec = lastMainFrameTimeUs / 1000000;
+    let endOfLog = false;
+
+    switch (eventType) {
+        case FLIGHT_LOG_EVENT.SYNC_BEEP: {
+            if (offsetObj.offset < bytes.length) {
+                const syncTimeUs = readUVarInt(bytes, offsetObj);
+                timeSec = syncTimeUs / 1000000;
+            }
+            break;
+        }
+        case FLIGHT_LOG_EVENT.LOGGING_RESUME: {
+            if (offsetObj.offset < bytes.length) {
+                readUVarInt(bytes, offsetObj); // logIteration (skip)
+            }
+            if (offsetObj.offset < bytes.length) {
+                const resumeTimeUs = readUVarInt(bytes, offsetObj);
+                timeSec = resumeTimeUs / 1000000;
+            }
+            break;
+        }
+        case FLIGHT_LOG_EVENT.LOG_END:
+        case FLIGHT_LOG_EVENT.LOG_END_255: {
+            endOfLog = true;
+            // Read null-terminated end-of-log message string
+            while (offsetObj.offset < bytes.length) {
+                const ch = bytes[offsetObj.offset++];
+                if (ch === 0) break;
+            }
+            timeSec = lastMainFrameTimeUs / 1000000;
+            break;
+        }
+        case FLIGHT_LOG_EVENT.DISARM: {
+            if (offsetObj.offset < bytes.length) {
+                readUVarInt(bytes, offsetObj); // disarm reason (skip)
+            }
+            timeSec = lastMainFrameTimeUs / 1000000;
+            break;
+        }
+        case FLIGHT_LOG_EVENT.FLIGHT_MODE: {
+            if (offsetObj.offset < bytes.length) readUVarInt(bytes, offsetObj); // newFlags
+            if (offsetObj.offset < bytes.length) readUVarInt(bytes, offsetObj); // lastFlags
+            timeSec = lastMainFrameTimeUs / 1000000;
+            break;
+        }
+        case FLIGHT_LOG_EVENT.GOVERNOR_STATE:
+        case FLIGHT_LOG_EVENT.RESCUE_STATE:
+        case FLIGHT_LOG_EVENT.AIRBORNE_STATE: {
+            if (offsetObj.offset < bytes.length) readUVarInt(bytes, offsetObj); // state value
+            timeSec = lastMainFrameTimeUs / 1000000;
+            break;
+        }
+        case FLIGHT_LOG_EVENT.INFLIGHT_ADJUSTMENT: {
+            if (offsetObj.offset < bytes.length) {
+                const tmp = bytes[offsetObj.offset++];
+                if (tmp < 128) {
+                    if (offsetObj.offset < bytes.length) readUVarInt(bytes, offsetObj); // value
+                } else {
+                    if (offsetObj.offset < bytes.length) readUVarInt(bytes, offsetObj); // value
+                    if (offsetObj.offset + 4 <= bytes.length) offsetObj.offset += 4; // float32
+                }
+            }
+            timeSec = lastMainFrameTimeUs / 1000000;
+            break;
+        }
+        case FLIGHT_LOG_EVENT.CUSTOM_DATA: {
+            if (offsetObj.offset < bytes.length) {
+                const len = bytes[offsetObj.offset++];
+                offsetObj.offset = Math.min(offsetObj.offset + len, bytes.length);
+            }
+            timeSec = lastMainFrameTimeUs / 1000000;
+            break;
+        }
+        case FLIGHT_LOG_EVENT.CUSTOM_STRING: {
+            if (offsetObj.offset < bytes.length) {
+                const len = bytes[offsetObj.offset++];
+                for (let i = 0; i < len && offsetObj.offset < bytes.length; i++) {
+                    offsetObj.offset++;
+                }
+            }
+            timeSec = lastMainFrameTimeUs / 1000000;
+            break;
+        }
+        default:
+            timeSec = lastMainFrameTimeUs / 1000000;
+            break;
+    }
+
+    return { name: eventName, timeSec, endOfLog };
+}
+
 /**
  * Check if the log is a valid Rotorflight helicopter blackbox log.
  * 
@@ -303,6 +439,9 @@ export function parseBinaryBbl(bytes: Uint8Array, fileName: string): BlackboxLog
 
     const offsetObj = { offset };
 
+    // Track the last main frame timestamp for accurate event timing
+    let lastMainFrameTimeUs = 0;
+
     while (offsetObj.offset < bytes.length) {
       const frameTypeChar = bytes[offsetObj.offset++];
       if (frameTypeChar === 0x49) {
@@ -320,6 +459,10 @@ export function parseBinaryBbl(bytes: Uint8Array, fileName: string): BlackboxLog
           rows.push(frameValues);
           prevPrevValues = [...prevFrameValues];
           prevFrameValues = [...frameValues];
+          // Time is at field index 1 (FLIGHT_LOG_FIELD_INDEX_TIME)
+          if (frameValues.length > 1) {
+            lastMainFrameTimeUs = frameValues[1];
+          }
         }
       } else if (frameTypeChar === 0x50) {
         // 'P' - Predicted frame (Delta from predictor)
@@ -342,30 +485,23 @@ export function parseBinaryBbl(bytes: Uint8Array, fileName: string): BlackboxLog
             // Average
             predicted = Math.round(((prevFrameValues[f] || 0) + (prevPrevValues[f] || 0)) / 2);
           } else if (predType === 8) {
-            predicted = 1500;
-          } else if (predType === 9) {
-            predicted = 1000;
+            predicted = (frameValues[0] || 0) + delta; // motor 0 relative
+          } else if (predType === 10) {
+            predicted = lastMainFrameTimeUs + delta; // time relative
+          } else if (predType === 11) {
+            predicted = (frameValues[0] || 0) + delta;
+          } else {
+            predicted = delta;
           }
-          frameValues[f] = predicted + delta;
+          frameValues[f] = predicted;
         }
         if (valid) {
           rows.push(frameValues);
-          prevPrevValues = [...prevFrameValues];
           prevFrameValues = [...frameValues];
-        }
-      } else if (frameTypeChar === 0x45) {
-        // 'E' - Event frame
-        if (offsetObj.offset < bytes.length) {
-          const eventType = bytes[offsetObj.offset++];
-          let eventName = `Event #${eventType}`;
-          if (eventType === 0) eventName = 'Sync Beep';
-          else if (eventType === 10) eventName = 'Flight Mode';
-          else if (eventType === 11) {
-            eventName = 'End of Log';
-            events.push({ timeSec: (rows.length > 0 ? rows[rows.length - 1][1] / 1000000 : 0), name: eventName });
-            break; // End of this flight log
-          } else if (eventType === 30) eventName = 'Disarm/Arm';
-          events.push({ timeSec: (rows.length > 0 ? rows[rows.length - 1][1] / 1000000 : 0), name: eventName });
+          // Update lastMainFrameTimeUs from predicted time frame (time is at index 1)
+          if (frameValues.length > 1) {
+            lastMainFrameTimeUs = frameValues[1];
+          }
         }
       } else if (frameTypeChar === 0x53) {
         // 'S' - Slow frame
@@ -374,6 +510,15 @@ export function parseBinaryBbl(bytes: Uint8Array, fileName: string): BlackboxLog
         for (let sc = 0; sc < slowCount; sc++) {
           if (offsetObj.offset >= bytes.length) break;
           readUVarInt(bytes, offsetObj);
+        }
+      } else if (frameTypeChar === 0x45) {
+        // 'E' - Event frame - use proper parser with correct timestamps
+        const result = parseEventFrame(bytes, offsetObj, lastMainFrameTimeUs);
+        if (result) {
+          events.push({ timeSec: result.timeSec, name: result.name });
+          if (result.endOfLog) {
+            break; // End of this flight log
+          }
         }
       } else if (frameTypeChar === 0x48) {
         // 'H' encountered in stream -> potential start of next log!
