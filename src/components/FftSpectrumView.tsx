@@ -1,13 +1,15 @@
 import React, { useRef, useEffect, useState, useMemo } from 'react';
 import { FftResult, HeliConfig } from '../types/blackbox';
 import { useTheme } from '../context/ThemeContext';
-import { Activity, Sliders, Sparkles, Check, ChevronDown } from 'lucide-react';
+import { Activity, Sliders, Sparkles, Check, ChevronDown, ShieldAlert } from 'lucide-react';
 
 interface FftSpectrumViewProps {
   fft: FftResult;
   headSpeedRpm: number;
   config?: HeliConfig;
   activeWindowSec?: { start: number; end: number };
+  /** 분석 불가 안내(예: 선택 구간 < 30초). null이면 정상 스펙트럼 표시 */
+  analysisNotice?: string | null;
 }
 
 interface DetectedPeak {
@@ -24,6 +26,7 @@ export const FftSpectrumView: React.FC<FftSpectrumViewProps> = ({
   headSpeedRpm,
   config,
   activeWindowSec,
+  analysisNotice,
 }) => {
   const { theme } = useTheme();
   const isDark = theme === 'dark';
@@ -33,6 +36,9 @@ export const FftSpectrumView: React.FC<FftSpectrumViewProps> = ({
 
   // View state
   const [maxFreqRange, setMaxFreqRange] = useState<250 | 500 | 1000>(500);
+  // X축 시작(스킵) 주파수: 0 ~ 50 Hz. 그래프의 X축 0점이 이 주파수로 설정된다.
+  // (저주파 대역(< 25Hz)의 과도한 진동이 다른 주파수 표시를 압도하는 문제 해결)
+  const [skipHz, setSkipHz] = useState<number>(25);
   const [showRoll, setShowRoll] = useState(true);
   const [showPitch, setShowPitch] = useState(true);
   const [showYaw, setShowYaw] = useState(true);
@@ -73,17 +79,19 @@ export const FftSpectrumView: React.FC<FftSpectrumViewProps> = ({
     }
   }, [tail1P]);
 
-  // Max observed amplitude in the visible frequency range (>= 12Hz to maxFreqRange)
+  // Max observed amplitude in the visible frequency range (skipHz ~ maxFreqRange)
   const maxObservedAmp = useMemo(() => {
     let max = 0.05;
     const limitIdx = Math.min(
       fft.frequencies.length,
       Math.floor((maxFreqRange / (fft.sampleRate / 2)) * fft.frequencies.length)
     );
+    // 항상 12Hz 미만의 잡음은 제외하고, 스킵 구간도 Y축 자동 스케일에 반영하지 않는다
+    const minVisibleHz = Math.max(skipHz, 12);
 
     for (let i = 2; i < limitIdx; i++) {
       const f = fft.frequencies[i];
-      if (f < 12) continue; // Skip sub-audible DC noise
+      if (f < minVisibleHz) continue; // Skip DC/sub-audible noise + skipHz band
       if (showRoll) max = Math.max(max, fft.roll[i]);
       if (showPitch) max = Math.max(max, fft.pitch[i]);
       if (showYaw) max = Math.max(max, fft.yaw[i]);
@@ -92,7 +100,7 @@ export const FftSpectrumView: React.FC<FftSpectrumViewProps> = ({
       }
     }
     return max;
-  }, [fft, maxFreqRange, showRoll, showPitch, showYaw, showAcc]);
+  }, [fft, maxFreqRange, skipHz, showRoll, showPitch, showYaw, showAcc]);
 
   // Adaptive Y-axis configuration:
   // Subdivides into 0.2°/s units if vibration is low, or 1.0°/s units if vibration is large
@@ -174,10 +182,9 @@ export const FftSpectrumView: React.FC<FftSpectrumViewProps> = ({
       let chMax = 0;
       for (let i = 2; i < limitIdx; i++) {
         const f = fft.frequencies[i];
-        if (f >= 15 && f <= maxFreqRange) {
-          const val = ch.data[i] * ch.scale;
-          if (val > chMax) chMax = val;
-        }
+        if (f < Math.max(skipHz, 15) || f > maxFreqRange) continue;
+        const val = ch.data[i] * ch.scale;
+        if (val > chMax) chMax = val;
       }
 
       if (chMax < 0.04) return;
@@ -186,7 +193,7 @@ export const FftSpectrumView: React.FC<FftSpectrumViewProps> = ({
       const candidates: Array<{ freq: number; amp: number }> = [];
       for (let i = 2; i < limitIdx - 1; i++) {
         const f = fft.frequencies[i];
-        if (f < 15 || f > maxFreqRange) continue;
+        if (f < Math.max(skipHz, 15) || f > maxFreqRange) continue;
         const val = ch.data[i] * ch.scale;
         if (val > ch.data[i - 1] * ch.scale && val > ch.data[i + 1] * ch.scale && val >= threshold) {
           candidates.push({ freq: f, amp: val });
@@ -226,7 +233,7 @@ export const FftSpectrumView: React.FC<FftSpectrumViewProps> = ({
 
     // Sort by amplitude descending
     return list.sort((a, b) => b.amp - a.amp);
-  }, [fft, maxFreqRange, showRoll, showPitch, showYaw, showAcc, main1P, main2P, tail1P, motor1P, bladeCount]);
+  }, [fft, maxFreqRange, skipHz, showRoll, showPitch, showYaw, showAcc, main1P, main2P, tail1P, motor1P, bladeCount]);
 
   // Overall highest peak
   const globalMaxPeak = detectedPeaks[0] || null;
@@ -268,9 +275,24 @@ export const FftSpectrumView: React.FC<FftSpectrumViewProps> = ({
     ctx.font = '11px sans-serif';
     ctx.textAlign = 'center';
 
+    // X축 가시 범위: [skipHz, maxFreqRange] — X축 0점이 skipHz가 되도록 매핑
+    const freqSpan = Math.max(1, maxFreqRange - skipHz);
+    const freqToX = (f: number): number => padLeft + ((f - skipHz) / freqSpan) * plotW;
+
     const freqStep = maxFreqRange <= 250 ? 25 : maxFreqRange <= 500 ? 50 : 100;
-    for (let f = 0; f <= maxFreqRange; f += freqStep) {
-      const x = padLeft + (f / maxFreqRange) * plotW;
+    // 스킵 지점(X축 시작)을 원점으로 표시
+    const originX = freqToX(skipHz);
+    ctx.beginPath();
+    ctx.moveTo(originX, padTop);
+    ctx.lineTo(originX, padTop + plotH);
+    ctx.stroke();
+    ctx.fillText(`${skipHz}Hz`, originX, padTop + plotH + 18);
+
+    // 그 외 눈금은 skipHz 이후의 정수 배수로 배치 (skipHz=0 이면 중복 방지)
+    let startTick = Math.ceil(skipHz / freqStep) * freqStep;
+    if (startTick === skipHz) startTick += freqStep;
+    for (let f = startTick; f <= maxFreqRange; f += freqStep) {
+      const x = freqToX(f);
       ctx.beginPath();
       ctx.moveTo(x, padTop);
       ctx.lineTo(x, padTop + plotH);
@@ -330,8 +352,8 @@ export const FftSpectrumView: React.FC<FftSpectrumViewProps> = ({
       ];
 
       markers.forEach(({ freq, label, color, bg }) => {
-        if (freq > 0 && freq <= maxFreqRange) {
-          const x = padLeft + (freq / maxFreqRange) * plotW;
+        if (freq >= skipHz && freq <= maxFreqRange) {
+          const x = freqToX(freq);
 
           // Dotted harmonic line
           ctx.save();
@@ -397,10 +419,11 @@ export const FftSpectrumView: React.FC<FftSpectrumViewProps> = ({
 
       for (let i = 1; i < numPoints; i++) {
         const f = fft.frequencies[i];
+        if (f < skipHz) continue; // Skip Hz 아래 대역은 그리지 않는다
         if (f > maxFreqRange) break;
 
         const val = data[i] * scaleFactor;
-        const x = padLeft + (f / maxFreqRange) * plotW;
+        const x = freqToX(f);
         const y = padTop + plotH - Math.min(plotH, (val / yAxisConfig.maxAmp) * plotH);
 
         if (first) {
@@ -428,7 +451,7 @@ export const FftSpectrumView: React.FC<FftSpectrumViewProps> = ({
     if (showPeakMarkers && detectedPeaks.length > 0) {
       // Draw top prominent peaks (up to 4 to prevent crowding)
       detectedPeaks.slice(0, 4).forEach((peak, rank) => {
-        const x = padLeft + (peak.freq / maxFreqRange) * plotW;
+        const x = freqToX(peak.freq);
         const y = padTop + plotH - Math.min(plotH, (peak.amp / yAxisConfig.maxAmp) * plotH);
 
         if (x < padLeft || x > padLeft + plotW) return;
@@ -506,15 +529,13 @@ export const FftSpectrumView: React.FC<FftSpectrumViewProps> = ({
   }, [
     fft,
     maxFreqRange,
+    skipHz,
     showRoll,
     showPitch,
     showYaw,
     showAcc,
     showHarmonics,
     showPeakMarkers,
-    showFilterSim,
-    simNotchFreq,
-    simNotchQ,
     hoverInfo,
     yAxisConfig,
     detectedPeaks,
@@ -546,7 +567,7 @@ export const FftSpectrumView: React.FC<FftSpectrumViewProps> = ({
     }
 
     const freqFrac = (x - padLeft) / plotW;
-    const targetFreq = freqFrac * maxFreqRange;
+    const targetFreq = skipHz + freqFrac * (maxFreqRange - skipHz);
 
     // Find nearest bin
     const freqStep = fft.sampleRate / (fft.frequencies.length * 2);
@@ -753,23 +774,6 @@ export const FftSpectrumView: React.FC<FftSpectrumViewProps> = ({
             RPM 하모닉
           </button>
 
-          {/* Filter Simulator Toggle */}
-          <button
-            onClick={() => setShowFilterSim(!showFilterSim)}
-            className={`px-2.5 py-1 rounded-lg text-xs font-medium border transition flex items-center gap-1 cursor-pointer ${
-              showFilterSim
-                ? isDark
-                  ? 'bg-red-900/40 border-red-500/50 text-red-300'
-                  : 'bg-red-50 border-red-300 text-red-700'
-                : isDark
-                ? 'bg-slate-800 border-slate-700 text-slate-400'
-                : 'bg-slate-100 border-slate-200 text-slate-600'
-            }`}
-          >
-            <Sliders className="w-3 h-3" />
-            <span>가상 노치</span>
-          </button>
-
           {/* Max Frequency Range Selector */}
           <div
             className={`flex items-center rounded-lg p-0.5 border text-xs ${
@@ -793,6 +797,36 @@ export const FftSpectrumView: React.FC<FftSpectrumViewProps> = ({
                 {range}Hz
               </button>
             ))}
+          </div>
+
+          {/* Skip Hz — X축 시작(스킵) 주파수 0 ~ 50Hz */}
+          <div
+            className={`flex items-center gap-1.5 rounded-lg px-2 py-1 border text-xs ${
+              isDark ? 'bg-slate-950 border-slate-800' : 'bg-slate-100 border-slate-200'
+            }`}
+            title="X축 0점(시작 주파수)을 이 값으로 설정합니다. 25Hz 미만의 과도한 저주파 진동이 다른 주파수를 압도할 때 올려서 숨기세요."
+          >
+            <span className={`text-[10px] font-medium whitespace-nowrap ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
+              Skip Hz
+            </span>
+            <select
+              value={skipHz}
+              onChange={e => {
+                const v = parseInt(e.target.value, 10);
+                setSkipHz(Number.isFinite(v) ? Math.max(0, Math.min(50, v)) : 0);
+              }}
+              className={`rounded px-1 py-0.5 font-mono text-xs outline-none cursor-pointer ${
+                isDark
+                  ? 'bg-slate-800 text-white border border-slate-700'
+                  : 'bg-white text-slate-900 border border-slate-300'
+              }`}
+            >
+              {Array.from({ length: 11 }, (_, i) => i * 5).map(v => (
+                <option key={v} value={v}>
+                  {v}Hz
+                </option>
+              ))}
+            </select>
           </div>
         </div>
       </div>
@@ -896,6 +930,21 @@ export const FftSpectrumView: React.FC<FftSpectrumViewProps> = ({
           onPointerLeave={handlePointerLeave}
           className="w-full h-full block touch-none"
         />
+
+        {/* Analysis unavailable notice (e.g. selected window < 30s) */}
+        {analysisNotice && (
+          <div className={`absolute inset-0 z-30 flex flex-col items-center justify-center gap-2 backdrop-blur-xs ${
+            isDark ? 'bg-slate-950/80' : 'bg-white/80'
+          }`}>
+            <ShieldAlert className={`w-8 h-8 ${isDark ? 'text-amber-400' : 'text-amber-600'}`} />
+            <p className={`text-sm font-bold ${isDark ? 'text-amber-300' : 'text-amber-700'}`}>
+              {analysisNotice}
+            </p>
+            <p className={`text-xs ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
+              타임라인에서 빠른 구간 선택(스풀업 / 호버링·비행중)을 이용하세요.
+            </p>
+          </div>
+        )}
 
         {/* Interactive Tooltip Card */}
         {hoverInfo && (

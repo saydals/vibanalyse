@@ -369,35 +369,87 @@ export const TimeDomainView: React.FC<TimeDomainViewProps> = ({
           </span>
         </div>
 
-        {/* Quick phase selectors */}
-        <div className="flex items-center gap-1.5">
-          <span className="text-slate-400 text-[11px]">빠른 구간 선택:</span>
-          <button
-            onClick={() => {
-              const start = Math.min(log.durationSec * 0.25, 3.0);
-              const end = Math.max(start + 2.0, log.durationSec * 0.85);
-              onWindowChange({ start, end });
-            }}
-            className={`px-2 py-0.5 rounded text-[11px] transition cursor-pointer border ${
-              isDark
-                ? 'bg-slate-800 hover:bg-slate-700 text-slate-300 border-slate-700'
-                : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-200'
-            }`}
-          >
-            호버링/비행 중 (Spool 제외)
-          </button>
-          <button
-            onClick={() => onWindowChange({ start: 0, end: Math.min(3.5, log.durationSec) })}
-            className={`px-2 py-0.5 rounded text-[11px] transition cursor-pointer border ${
-              isDark
-                ? 'bg-slate-800 hover:bg-slate-700 text-slate-300 border-slate-700'
-                : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-200'
-            }`}
-          >
-            스풀업 (공진 검사)
-          </button>
-        </div>
+        {/* Quick phase selectors — 빠른 구간 선택 */}
+        <QuickPhaseSelector log={log} selectedWindow={selectedWindow} onWindowChange={onWindowChange} />
       </div>
+    </div>
+  );
+};
+
+/**
+ * 빠른 구간 선택 규칙:
+ *  - 스풀업: 전체 비행의 초반 30초. (전체 길이 < 30초면 분석 불가)
+ *  - 호버링/비행중: 전체 길이 ≥ 60초면 앞 30초/뒤 30초를 제외한 나머지.
+ *    전체 길이 < 60초면 앞 20초/뒤 10초를 제외한 나머지.
+ *  - 전체 길이 < 30초면 분석하지 않는다 (버튼 비활성 + 안내).
+ */
+const QuickPhaseSelector: React.FC<{
+  log: BlackboxLog;
+  selectedWindow: { start: number; end: number };
+  onWindowChange: (window: { start: number; end: number }) => void;
+}> = ({ log, selectedWindow, onWindowChange }) => {
+  const { theme } = useTheme();
+  const isDark = theme === 'dark';
+
+  const dur = log.durationSec || 0;
+  const canAnalyze = dur >= 30;
+
+  // 스풀업: 전체 비행 라인의 초반 30초
+  const spoolUp: { start: number; end: number } | null = canAnalyze
+    ? { start: 0, end: Math.min(30, dur) }
+    : null;
+
+  // 호버링/비행중: 스풀업 이후 + 착륙(마지막) 구간 제외
+  const inFlight: { start: number; end: number } | null = (() => {
+    if (!canAnalyze) return null;
+    if (dur >= 60) return { start: 30, end: dur - 30 };
+    return { start: 20, end: dur - 10 }; // 30초 ≤ dur < 60초
+  })();
+
+  const isSpoolActive = spoolUp && Math.abs(spoolUp.start - selectedWindow.start) < 0.01 && Math.abs(spoolUp.end - selectedWindow.end) < 0.01;
+  const isInFlightActive = inFlight && Math.abs(inFlight.start - selectedWindow.start) < 0.01 && Math.abs(inFlight.end - selectedWindow.end) < 0.01;
+
+  const baseBtn = `px-2 py-0.5 rounded text-[11px] transition border`;
+  const enabledCls = isDark
+    ? 'bg-slate-800 hover:bg-slate-700 text-slate-300 border-slate-700 cursor-pointer'
+    : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-200 cursor-pointer';
+  const activeCls = 'bg-cyan-600 text-white border-cyan-500 font-semibold cursor-pointer';
+  const disabledCls = isDark
+    ? 'bg-slate-900 text-slate-600 border-slate-800 cursor-not-allowed opacity-60'
+    : 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed opacity-60';
+
+  return (
+    <div className="flex items-center gap-1.5">
+      <span className="text-slate-400 text-[11px]">빠른 구간 선택:</span>
+      <button
+        disabled={!spoolUp}
+        onClick={() => spoolUp && onWindowChange(spoolUp)}
+        title={
+          !spoolUp
+            ? '비행 구간이 30초 미만이어 스풀업 구간 분석이 불가능합니다.'
+            : '전체 비행 라인의 초반 30초 (스풀업/공진 검사)'
+        }
+        className={`${baseBtn} ${!spoolUp ? disabledCls : isSpoolActive ? activeCls : enabledCls}`}
+      >
+        스풀업 (0~30초)
+      </button>
+      <button
+        disabled={!inFlight}
+        onClick={() => inFlight && onWindowChange(inFlight)}
+        title={
+          !inFlight
+            ? '비행 구간이 30초 미만이어 호버링/비행중 분석이 불가능합니다.'
+            : dur >= 60
+            ? '앞 30초(스풀업)와 뒤 30초(착륙)를 제외한 나머지 비행 구간'
+            : '앞 20초(스풀업)와 뒤 10초(착륙)를 제외한 나머지 비행 구간'
+        }
+        className={`${baseBtn} ${!inFlight ? disabledCls : isInFlightActive ? activeCls : enabledCls}`}
+      >
+        호버링/비행 중
+      </button>
+      {!canAnalyze && (
+        <span className="text-rose-500 text-[11px] font-semibold">분석 불가 (30초 미만)</span>
+      )}
     </div>
   );
 };

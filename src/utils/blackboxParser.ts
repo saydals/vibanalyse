@@ -1,9 +1,8 @@
 /**
- * Rotorflight Blackbox Log Parser
- * Parses both binary .BBL files and exported .CSV/.TXT logs.
- * Supports multi-log separation and robust recovery for truncated logs.
+ * Rotorflight Blackbox Log Parser — reference port of the official viewer
+ * (rfblackbox/js/flightlog_parser.js + decoders.js + Rotorflight blackbox.c).
+ * Binary .BBL + exported .CSV/.TXT, multi-log aware.
  */
-
 import { BlackboxLog, FlightEvent, VibrationSummary, HeliConfig, VibrationGrade, RotorflightValidation } from '../types/blackbox';
 import { computeMultiAxisFft, findVibrationPeaks } from './fft';
 
@@ -12,162 +11,446 @@ export interface ParseResult {
   primaryLogIndex: number;
 }
 
-// Variable-byte unsigned integer reader
-function readUVarInt(bytes: Uint8Array, offsetObj: { offset: number }): number {
-  let result = 0;
-  let shift = 0;
-  while (offsetObj.offset < bytes.length) {
-    const byte = bytes[offsetObj.offset++];
-    result |= (byte & 0x7f) << shift;
-    if ((byte & 0x80) === 0) {
-      break;
-    }
-    shift += 7;
-    if (shift >= 32) break;
-  }
-  return result >>> 0;
-}
+// FFT 분석에 필요한 최소 연속 구간(초). 이보다 짧은 구간은 분석하지 않는다.
+export const MIN_ANALYSIS_SEC = 30;
 
-// Signed zigzag variable-byte integer reader
-function readSVarInt(bytes: Uint8Array, offsetObj: { offset: number }): number {
-  const u = readUVarInt(bytes, offsetObj);
-  return (u & 1) ? -(u >>> 1) - 1 : (u >>> 1);
-}
+// Field predictors (blackbox_fielddefs.h / flightlog_parser.js)
+export const PREDICTOR_0 = 0;
+export const PREDICTOR_PREVIOUS = 1;
+export const PREDICTOR_STRAIGHT_LINE = 2;
+export const PREDICTOR_AVERAGE_2 = 3;
+export const PREDICTOR_MINTHROTTLE = 4;
+export const PREDICTOR_MOTOR_0 = 5;
+export const PREDICTOR_INC = 6;
+export const PREDICTOR_HOME_COORD = 7;
+export const PREDICTOR_1500 = 8;
+export const PREDICTOR_VBATREF = 9;
+export const PREDICTOR_LAST_MAIN_FRAME_TIME = 10;
+export const PREDICTOR_MINMOTOR = 11;
+export const PREDICTOR_HOME_COORD_1 = 256;
 
-// Rotorflight/BetaFlight event type constants (from flightlog_parser.js)
-const FLIGHT_LOG_EVENT = {
-    SYNC_BEEP: 0,
-    LOGGING_RESUME: 1,
-    FLIGHT_MODE: 10,
-    LOG_END: 11,
-    DISARM: 30,
-    INFLIGHT_ADJUSTMENT: 33,
-    CUSTOM_DATA: 34,
-    CUSTOM_STRING: 35,
-    GOVERNOR_STATE: 36,
-    RESCUE_STATE: 37,
-    AIRBORNE_STATE: 38,
-    LOG_END_255: 255,
-};
+// Field encodings
+export const ENCODING_SIGNED_VB = 0;
+export const ENCODING_UNSIGNED_VB = 1;
+export const ENCODING_NEG_14BIT = 3;
+export const ENCODING_TAG8_8SVB = 6;
+export const ENCODING_TAG2_3S32 = 7;
+export const ENCODING_TAG8_4S16 = 8;
+export const ENCODING_NULL = 9;
+export const ENCODING_TAG2_3SVARIABLE = 10;
+
+// Event codes — official rfblackbox values (js/flightlog_fielddefs.js)
+export const EVT_SYNC_BEEP = 0;
+export const EVT_INFLIGHT_ADJUSTMENT = 13;
+export const EVT_LOGGING_RESUME = 14;
+export const EVT_DISARM = 15;
+export const EVT_FLIGHT_MODE = 30;
+export const EVT_GOVERNOR_STATE = 50;
+export const EVT_RESCUE_STATE = 51;
+export const EVT_AIRBORNE_STATE = 52;
+export const EVT_CUSTOM_DATA = 100;
+export const EVT_CUSTOM_STRING = 101;
+export const EVT_LOG_END = 255;
 
 const FLIGHT_EVENT_NAMES: Record<number, string> = {
-    [FLIGHT_LOG_EVENT.SYNC_BEEP]: 'Sync Beep',
-    [FLIGHT_LOG_EVENT.LOGGING_RESUME]: 'Logging Resume',
-    [FLIGHT_LOG_EVENT.FLIGHT_MODE]: 'Flight Mode',
-    [FLIGHT_LOG_EVENT.LOG_END]: 'End of Log',
-    [FLIGHT_LOG_EVENT.DISARM]: 'Disarm',
-    [FLIGHT_LOG_EVENT.INFLIGHT_ADJUSTMENT]: 'In-flight Adjustment',
-    [FLIGHT_LOG_EVENT.CUSTOM_DATA]: 'Custom Data',
-    [FLIGHT_LOG_EVENT.CUSTOM_STRING]: 'Custom String',
-    [FLIGHT_LOG_EVENT.GOVERNOR_STATE]: 'Governor State',
-    [FLIGHT_LOG_EVENT.RESCUE_STATE]: 'Rescue State',
-    [FLIGHT_LOG_EVENT.AIRBORNE_STATE]: 'Airborne State',
+  [EVT_SYNC_BEEP]: 'Sync Beep',
+  [EVT_INFLIGHT_ADJUSTMENT]: 'In-flight Adjustment',
+  [EVT_LOGGING_RESUME]: 'Logging Resume',
+  [EVT_DISARM]: 'Disarm',
+  [EVT_FLIGHT_MODE]: 'Flight Mode',
+  [EVT_GOVERNOR_STATE]: 'Governor State',
+  [EVT_RESCUE_STATE]: 'Rescue State',
+  [EVT_AIRBORNE_STATE]: 'Airborne State',
+  [EVT_CUSTOM_DATA]: 'Custom Data',
+  [EVT_CUSTOM_STRING]: 'Custom String',
+  [EVT_LOG_END]: 'End of Log',
 };
 
-/**
- * Parse a Rotorflight/BetaFlight event frame from binary data.
- * Reads the event type and any associated data from the stream.
- * Returns the event name, time in seconds, and whether the log should end.
- */
-function parseEventFrame(
-    bytes: Uint8Array,
-    offsetObj: { offset: number },
-    lastMainFrameTimeUs: number
-): { name: string; timeSec: number; endOfLog: boolean } | null {
-    if (offsetObj.offset >= bytes.length) return null;
+export const START_MARKER_TEXT = 'H Product:Blackbox flight data recorder by Nicholas Sherlock\n';
+const MAX_TIME_JUMP_US = 10 * 1000000;
+const MAX_ITER_JUMP = 500 * 10;
+/* Byte stream + helpers: reference ArrayDataStream + tools.js port. */
 
-    const eventType = bytes[offsetObj.offset++];
-    const eventName = FLIGHT_EVENT_NAMES[eventType] || `Event #${eventType}`;
+function hexToFloat(hex: string): number {
+  const u = new Uint32Array(1);
+  u[0] = parseInt(hex.trim(), 16) >>> 0;
+  return new Float32Array(u.buffer)[0];
+}
 
-    let timeSec = lastMainFrameTimeUs / 1000000;
-    let endOfLog = false;
+function signExtend2Bit(v: number): number { return (v & 0x02) ? (v | 0xfffffffc) : v; }
+function signExtend4Bit(v: number): number { return (v & 0x08) ? (v | 0xfffffff0) : v; }
+function signExtend5Bit(v: number): number { return (v & 0x10) ? (v | 0xffffffe0) : v; }
+function signExtend6Bit(v: number): number { return (v & 0x20) ? (v | 0xffffffc0) : v; }
+function signExtend7Bit(v: number): number { return (v & 0x40) ? (v | 0xffffff80) : v; }
+function signExtend8Bit(v: number): number { return (v & 0x80) ? (v | 0xffffff00) : v; }
+function signExtend14Bit(v: number): number { return (v & 0x2000) ? (v | 0xffffc000) : v; }
+function signExtend16Bit(v: number): number { return (v & 0x8000) ? (v | 0xffff0000) : v; }
+function signExtend24Bit(v: number): number { return (v & 0x800000) ? (v | 0xff000000) : v; }
 
-    switch (eventType) {
-        case FLIGHT_LOG_EVENT.SYNC_BEEP: {
-            if (offsetObj.offset < bytes.length) {
-                const syncTimeUs = readUVarInt(bytes, offsetObj);
-                timeSec = syncTimeUs / 1000000;
-            }
-            break;
-        }
-        case FLIGHT_LOG_EVENT.LOGGING_RESUME: {
-            if (offsetObj.offset < bytes.length) {
-                readUVarInt(bytes, offsetObj); // logIteration (skip)
-            }
-            if (offsetObj.offset < bytes.length) {
-                const resumeTimeUs = readUVarInt(bytes, offsetObj);
-                timeSec = resumeTimeUs / 1000000;
-            }
-            break;
-        }
-        case FLIGHT_LOG_EVENT.LOG_END:
-        case FLIGHT_LOG_EVENT.LOG_END_255: {
-            endOfLog = true;
-            // Read null-terminated end-of-log message string
-            while (offsetObj.offset < bytes.length) {
-                const ch = bytes[offsetObj.offset++];
-                if (ch === 0) break;
-            }
-            timeSec = lastMainFrameTimeUs / 1000000;
-            break;
-        }
-        case FLIGHT_LOG_EVENT.DISARM: {
-            if (offsetObj.offset < bytes.length) {
-                readUVarInt(bytes, offsetObj); // disarm reason (skip)
-            }
-            timeSec = lastMainFrameTimeUs / 1000000;
-            break;
-        }
-        case FLIGHT_LOG_EVENT.FLIGHT_MODE: {
-            if (offsetObj.offset < bytes.length) readUVarInt(bytes, offsetObj); // newFlags
-            if (offsetObj.offset < bytes.length) readUVarInt(bytes, offsetObj); // lastFlags
-            timeSec = lastMainFrameTimeUs / 1000000;
-            break;
-        }
-        case FLIGHT_LOG_EVENT.GOVERNOR_STATE:
-        case FLIGHT_LOG_EVENT.RESCUE_STATE:
-        case FLIGHT_LOG_EVENT.AIRBORNE_STATE: {
-            if (offsetObj.offset < bytes.length) readUVarInt(bytes, offsetObj); // state value
-            timeSec = lastMainFrameTimeUs / 1000000;
-            break;
-        }
-        case FLIGHT_LOG_EVENT.INFLIGHT_ADJUSTMENT: {
-            if (offsetObj.offset < bytes.length) {
-                const tmp = bytes[offsetObj.offset++];
-                if (tmp < 128) {
-                    if (offsetObj.offset < bytes.length) readUVarInt(bytes, offsetObj); // value
-                } else {
-                    if (offsetObj.offset < bytes.length) readUVarInt(bytes, offsetObj); // value
-                    if (offsetObj.offset + 4 <= bytes.length) offsetObj.offset += 4; // float32
-                }
-            }
-            timeSec = lastMainFrameTimeUs / 1000000;
-            break;
-        }
-        case FLIGHT_LOG_EVENT.CUSTOM_DATA: {
-            if (offsetObj.offset < bytes.length) {
-                const len = bytes[offsetObj.offset++];
-                offsetObj.offset = Math.min(offsetObj.offset + len, bytes.length);
-            }
-            timeSec = lastMainFrameTimeUs / 1000000;
-            break;
-        }
-        case FLIGHT_LOG_EVENT.CUSTOM_STRING: {
-            if (offsetObj.offset < bytes.length) {
-                const len = bytes[offsetObj.offset++];
-                for (let i = 0; i < len && offsetObj.offset < bytes.length; i++) {
-                    offsetObj.offset++;
-                }
-            }
-            timeSec = lastMainFrameTimeUs / 1000000;
-            break;
-        }
-        default:
-            timeSec = lastMainFrameTimeUs / 1000000;
-            break;
+function parseCommaList(value: string): number[] {
+  return value.split(',').map(s => {
+    const t = s.trim();
+    if (t.length === 0) return 0;
+    const n = Number(t);
+    return Number.isFinite(n) ? n : 0;
+  });
+}
+
+/** Byte stream with exact rfblackbox ArrayDataStream semantics. */
+class ByteStream {
+  data: Uint8Array;
+  pos = 0;
+  start = 0;
+  end: number;
+  eof = false;
+  constructor(data: Uint8Array, start = 0, end?: number) {
+    this.data = data; this.start = start; this.pos = start;
+    this.end = end === undefined ? data.length : end;
+  }
+  readByte(): number {
+    if (this.pos < this.end) return this.data[this.pos++];
+    this.eof = true; return -1;
+  }
+  peekByte(): number {
+    if (this.pos < this.end) return this.data[this.pos];
+    this.eof = true; return -1;
+  }
+  peekChar(): string | number {
+    if (this.pos < this.end) return String.fromCharCode(this.data[this.pos]);
+    this.eof = true; return -1;
+  }
+  readChar(): string | number {
+    if (this.pos < this.end) return String.fromCharCode(this.data[this.pos++]);
+    this.eof = true; return -1;
+  }
+  unread(): void { this.pos--; }
+  readUnsignedVB(): number {
+    let shift = 0; let result = 0;
+    for (let i = 0; i < 5; i++) {
+      const b = this.readByte();
+      if (b === -1) return 0;
+      result = result | ((b & 0x7f) << shift);
+      if (b < 128) return result >>> 0;
+      shift += 7;
     }
-
-    return { name: eventName, timeSec, endOfLog };
+    return 0;
+  }
+  readSignedVB(): number {
+    const u = this.readUnsignedVB();
+    return (u >>> 1) ^ -(u & 1);
+  }
+  nextOffsetOf(needle: Uint8Array): number {
+    outer: for (let i = this.pos; i <= this.end - needle.length; i++) {
+      if (this.data[i] !== needle[0]) continue;
+      for (let j = 1; j < needle.length; j++) {
+        if (this.data[i + j] !== needle[j]) continue outer;
+      }
+      return i;
+    }
+    return -1;
+  }
+  readTag2_3S32(values: number[]): void {
+    const lead0 = this.readByte();
+    switch (lead0 >> 6) {
+      case 0:
+        values[0] = signExtend2Bit((lead0 >> 4) & 0x03);
+        values[1] = signExtend2Bit((lead0 >> 2) & 0x03);
+        values[2] = signExtend2Bit(lead0 & 0x03);
+        break;
+      case 1: {
+        values[0] = signExtend4Bit(lead0 & 0x0f);
+        const lb = this.readByte();
+        values[1] = signExtend4Bit(lb >> 4);
+        values[2] = signExtend4Bit(lb & 0x0f);
+        break;
+      }
+      case 2: {
+        values[0] = signExtend6Bit(lead0 & 0x3f);
+        values[1] = signExtend6Bit(this.readByte() & 0x3f);
+        values[2] = signExtend6Bit(this.readByte() & 0x3f);
+        break;
+      }
+      case 3: {
+        let lead = lead0;
+        for (let i = 0; i < 3; i++) {
+          switch (lead & 0x03) {
+            case 0: values[i] = signExtend8Bit(this.readByte()); break;
+            case 1: {
+              const b1 = this.readByte(); const b2 = this.readByte();
+              values[i] = signExtend16Bit(b1 | (b2 << 8)); break;
+            }
+            case 2: {
+              const b1 = this.readByte(); const b2 = this.readByte(); const b3 = this.readByte();
+              values[i] = signExtend24Bit(b1 | (b2 << 8) | (b3 << 16)); break;
+            }
+            case 3: {
+              const b1 = this.readByte(); const b2 = this.readByte();
+              const b3 = this.readByte(); const b4 = this.readByte();
+              values[i] = (b1 | (b2 << 8) | (b3 << 16) | (b4 << 24)) | 0; break;
+            }
+          }
+          lead >>= 2;
+        }
+        break;
+      }
+    }
+  }
+  readTag2_3SVariable(values: number[]): void {
+    const lead0 = this.readByte();
+    switch (lead0 >> 6) {
+      case 0:
+        values[0] = signExtend2Bit((lead0 >> 4) & 0x03);
+        values[1] = signExtend2Bit((lead0 >> 2) & 0x03);
+        values[2] = signExtend2Bit(lead0 & 0x03);
+        break;
+      case 1: {
+        values[0] = signExtend5Bit((lead0 & 0x3e) >> 1);
+        const lb2 = this.readByte();
+        values[1] = signExtend5Bit(((lead0 & 0x01) << 5) | ((lb2 & 0x0f) >> 4));
+        values[2] = signExtend4Bit(lb2 & 0x0f);
+        break;
+      }
+      case 2: {
+        const lb2 = this.readByte();
+        values[0] = signExtend8Bit(((lead0 & 0x3f) << 2) | ((lb2 & 0xc0) >> 6));
+        values[1] = signExtend7Bit(((lb2 & 0x3f) << 1) | ((lb2 & 0x80) >> 7));
+        values[2] = signExtend7Bit(this.readByte() & 0x7f);
+        break;
+      }
+      case 3: {
+        let lead = lead0;
+        for (let i = 0; i < 3; i++) {
+          switch (lead & 0x03) {
+            case 0: values[i] = signExtend8Bit(this.readByte()); break;
+            case 1: {
+              const b1 = this.readByte(); const b2 = this.readByte();
+              values[i] = signExtend16Bit(b1 | (b2 << 8)); break;
+            }
+            case 2: {
+              const b1 = this.readByte(); const b2 = this.readByte(); const b3 = this.readByte();
+              values[i] = signExtend24Bit(b1 | (b2 << 8) | (b3 << 16)); break;
+            }
+            case 3: {
+              const b1 = this.readByte(); const b2 = this.readByte();
+              const b3 = this.readByte(); const b4 = this.readByte();
+              values[i] = (b1 | (b2 << 8) | (b3 << 16) | (b4 << 24)) | 0; break;
+            }
+          }
+          lead >>= 2;
+        }
+        break;
+      }
+    }
+  }
+  readTag8_4S16_v2(values: number[]): void {
+    const FZ = 0, F4 = 1, F8 = 2, F16 = 3;
+    let selector = this.readByte();
+    let buffer = 0; let nibbleIndex = 0;
+    for (let i = 0; i < 4; i++) {
+      switch (selector & 0x03) {
+        case FZ: values[i] = 0; break;
+        case F4:
+          if (nibbleIndex === 0) {
+            buffer = this.readByte();
+            values[i] = signExtend4Bit(buffer >> 4); nibbleIndex = 1;
+          } else { values[i] = signExtend4Bit(buffer & 0x0f); nibbleIndex = 0; }
+          break;
+        case F8:
+          if (nibbleIndex === 0) values[i] = signExtend8Bit(this.readByte());
+          else {
+            const c1 = (buffer & 0x0f) << 4;
+            buffer = this.readByte();
+            values[i] = signExtend8Bit(c1 | (buffer >> 4));
+          }
+          break;
+        case F16:
+          if (nibbleIndex === 0) {
+            const c1 = this.readByte(); const c2 = this.readByte();
+            values[i] = signExtend16Bit((c1 << 8) | c2);
+          } else {
+            const c1 = this.readByte(); const c2 = this.readByte();
+            values[i] = signExtend16Bit(((buffer & 0x0f) << 12) | (c1 << 4) | (c2 >> 4));
+            buffer = c2;
+          }
+          break;
+      }
+      selector >>= 2;
+    }
+  }
+  readTag8_4S16_v1(values: number[]): void {
+    const FZ = 0, F4 = 1, F8 = 2, F16 = 3;
+    let selector = this.readByte();
+    for (let i = 0; i < 4; i++) {
+      switch (selector & 0x03) {
+        case FZ: values[i] = 0; break;
+        case F4: {
+          const combined = this.readByte();
+          values[i] = signExtend4Bit(combined & 0x0f);
+          i++; selector >>= 2;
+          values[i] = signExtend4Bit(combined >> 4);
+          break;
+        }
+        case F8: values[i] = signExtend8Bit(this.readByte()); break;
+        case F16: {
+          const c1 = this.readByte(); const c2 = this.readByte();
+          values[i] = signExtend16Bit(c1 | (c2 << 8)); break;
+        }
+      }
+      selector >>= 2;
+    }
+  }
+  readTag8_8SVB(values: number[], valueCount: number): void {
+    if (valueCount === 1) values[0] = this.readSignedVB();
+    else {
+      const header = this.readByte();
+      let h = header;
+      for (let i = 0; i < 8; i++, h >>= 1) values[i] = (h & 0x01) ? this.readSignedVB() : 0;
+    }
+  }
+}
+/* Frame defs + prediction + decode: reference parseFrame() port. */
+interface FrameDef {
+  name: string[];
+  nameToIndex: Record<string, number>;
+  count: number;
+  signed: number[];
+  predictor: number[];
+  encoding: number[];
+}
+interface SysConfig {
+  firmwareType: string; firmwareVersion: string; craftName: string;
+  looptimeUs: number; gyroScale: number; acc1G: number;
+  minthrottle: number; maxthrottle: number; motorOutputMin: number;
+  vbatref: number; vbatscale: number;
+  frameIntervalI: number; frameIntervalPNum: number; frameIntervalPDenom: number;
+  dataVersion: number;
+}
+function emptyFrameDef(): FrameDef {
+  return { name: [], nameToIndex: {}, count: 0, signed: [], predictor: [], encoding: [] };
+}
+function applyPrediction(
+  fi: number, predictor: number, value: number,
+  current: number[], previous: number[] | null, previous2: number[] | null,
+  sys: SysConfig, frameDefs: Record<string, FrameDef>, gpsHome1: number[] | null
+): number {
+  switch (predictor) {
+    case PREDICTOR_0: break;
+    case PREDICTOR_MINTHROTTLE: value = (value | 0) + sys.minthrottle; break;
+    case PREDICTOR_MINMOTOR: value = (value | 0) + (sys.motorOutputMin | 0); break;
+    case PREDICTOR_1500: value += 1500; break;
+    case PREDICTOR_MOTOR_0: {
+      const ix = frameDefs.I?.nameToIndex['motor[0]'];
+      if (ix === undefined || ix < 0) throw new Error('MOTOR_0 prediction before motor[0]');
+      value += current[ix]; break;
+    }
+    case PREDICTOR_VBATREF: value += sys.vbatref; break;
+    case PREDICTOR_PREVIOUS: if (previous) value += previous[fi]; break;
+    case PREDICTOR_STRAIGHT_LINE:
+      if (previous && previous2) value += 2 * previous[fi] - previous2[fi];
+      else if (previous) value += previous[fi];
+      break;
+    case PREDICTOR_AVERAGE_2:
+      if (previous && previous2) value += ~~((previous[fi] + previous2[fi]) / 2);
+      else if (previous) value += previous[fi];
+      break;
+    case PREDICTOR_HOME_COORD:
+      if (!gpsHome1) throw new Error('HOME_COORD without GPS home');
+      value += gpsHome1[0]; break;
+    case PREDICTOR_HOME_COORD_1:
+      if (!gpsHome1) throw new Error('HOME_COORD_1 without GPS home');
+      value += gpsHome1[1]; break;
+    case PREDICTOR_LAST_MAIN_FRAME_TIME: break; // caller adds mainHist1 time
+    default: throw new Error('Unsupported field predictor ' + predictor);
+  }
+  return value;
+}
+function decodeFrame(
+  stream: ByteStream, frameDef: FrameDef,
+  current: number[], previous: number[] | null, previous2: number[] | null,
+  skippedFrames: number, sys: SysConfig,
+  frameDefs: Record<string, FrameDef>, gpsHome1: number[] | null,
+  mainHist1Time: number | null
+): boolean {
+  const predictor = frameDef.predictor;
+  const encoding = frameDef.encoding;
+  const values = [0, 0, 0, 0, 0, 0, 0, 0];
+  let i = 0;
+  while (i < frameDef.count) {
+    if (predictor[i] === PREDICTOR_INC) {
+      current[i] = skippedFrames + 1;
+      if (previous) current[i] += previous[i];
+      i++; continue;
+    }
+    const enc = encoding[i];
+    let value = 0;
+    switch (enc) {
+      case ENCODING_SIGNED_VB: value = stream.readSignedVB(); break;
+      case ENCODING_UNSIGNED_VB: value = stream.readUnsignedVB(); break;
+      case ENCODING_NEG_14BIT: value = -signExtend14Bit(stream.readUnsignedVB()); break;
+      case ENCODING_TAG8_4S16:
+        if (sys.dataVersion < 2) stream.readTag8_4S16_v1(values);
+        else stream.readTag8_4S16_v2(values);
+        for (let j = 0; j < 4; j++, i++) {
+          current[i] = applyPrediction(i, predictor[i], values[j], current, previous, previous2, sys, frameDefs, gpsHome1);
+        }
+        if (stream.eof) return false;
+        continue;
+      case ENCODING_TAG2_3S32:
+        stream.readTag2_3S32(values);
+        for (let j = 0; j < 3; j++, i++) {
+          current[i] = applyPrediction(i, predictor[i], values[j], current, previous, previous2, sys, frameDefs, gpsHome1);
+        }
+        if (stream.eof) return false;
+        continue;
+      case ENCODING_TAG2_3SVARIABLE:
+        stream.readTag2_3SVariable(values);
+        for (let j = 0; j < 3; j++, i++) {
+          current[i] = applyPrediction(i, predictor[i], values[j], current, previous, previous2, sys, frameDefs, gpsHome1);
+        }
+        if (stream.eof) return false;
+        continue;
+      case ENCODING_TAG8_8SVB: {
+        let j = i + 1;
+        for (; j < i + 8 && j < frameDef.count; j++) {
+          if (encoding[j] !== ENCODING_TAG8_8SVB) break;
+        }
+        const groupCount = j - i;
+        stream.readTag8_8SVB(values, groupCount);
+        for (let k = 0; k < groupCount; k++, i++) {
+          current[i] = applyPrediction(i, predictor[i], values[k], current, previous, previous2, sys, frameDefs, gpsHome1);
+        }
+        if (stream.eof) return false;
+        continue;
+      }
+      case ENCODING_NULL: value = 0; break;
+      default:
+        throw new Error(`Unsupported field encoding ${enc} for field '${frameDef.name[i]}'`);
+    }
+    if (stream.eof) return false;
+    if (predictor[i] === PREDICTOR_LAST_MAIN_FRAME_TIME) {
+      if (mainHist1Time !== null) value += mainHist1Time;
+    } else {
+      value = applyPrediction(i, predictor[i], value, current, previous, previous2, sys, frameDefs, gpsHome1);
+    }
+    current[i] = value;
+    i++;
+  }
+  return !stream.eof;
+}
+function shouldHaveFrame(frameIndex: number, sys: SysConfig): boolean {
+  return ((frameIndex % sys.frameIntervalI) + sys.frameIntervalPNum - 1) % sys.frameIntervalPDenom < sys.frameIntervalPNum;
+}
+function countSkippedTo(target: number, last: number, sys: SysConfig): number {
+  if (last === -1) return 0;
+  let c = 0;
+  for (let f = last + 1; f < target; f++) if (!shouldHaveFrame(f, sys)) c++;
+  return c;
+}
+function countSkipped(last: number, sys: SysConfig): number {
+  if (last === -1) return 0;
+  let c = 0;
+  for (let f = last + 1; !shouldHaveFrame(f, sys); f++) c++;
+  return c;
 }
 
 /**
@@ -181,9 +464,12 @@ function parseEventFrame(
  */
 export function validateRotorflightLog(
   fieldNames: string[],
-  headers: Record<string, string>,
+  firmwareHeaderOrHeaders: string | Record<string, string>,
   rawHeaders?: string
 ): RotorflightValidation {
+  const headers: Record<string, string> = typeof firmwareHeaderOrHeaders === 'string'
+    ? { 'Firmware revision': firmwareHeaderOrHeaders }
+    : firmwareHeaderOrHeaders;
   let hasRotorflightHeader = false;
   let detectedHeaderTag: string | undefined;
 
@@ -304,34 +590,55 @@ export async function parseBlackboxFile(file: File | ArrayBuffer, fileName: stri
   const buffer = file instanceof File ? await file.arrayBuffer() : file;
   const uint8 = new Uint8Array(buffer);
 
-  // Check if text (CSV/TXT) or binary (.BBL)
-  const isText = checkIfTextLog(uint8);
+  // Text vs binary discriminator: NEVER route by content keywords.
+  // Binary .BBL headers contain the very same keywords ('loopIteration', 'gyroADC', ...)
+  // as CSV exports, so keyword sniffing misroutes real .BBL files to the CSV parser
+  // (resulting in garbage fieldNames and all-zero samples). Only a UTF-8 BOM or a
+  // .csv/.txt extension routes to the text parser first; everything else is parsed
+  // as binary .BBL first with a text fallback.
+  const lowerName = (fileName || '').toLowerCase();
+  const isTextByExtension = lowerName.endsWith('.csv') || lowerName.endsWith('.txt');
+  const hasUtf8Bom = uint8.length > 2 && uint8[0] === 0xef && uint8[1] === 0xbb && uint8[2] === 0xbf;
 
-  if (isText) {
-    const textDecoder = new TextDecoder('utf-8');
-    const text = textDecoder.decode(uint8);
-    const parsedLogs = parseCsvOrTextLog(text, fileName);
-    if (parsedLogs.length > 0) {
-      return { logs: parsedLogs, primaryLogIndex: 0 };
+  const parseAsText = (): ParseResult | null => {
+    try {
+      let text = new TextDecoder('utf-8').decode(uint8);
+      if (text.charCodeAt(0) === 0xfeff) text = text.slice(1);
+      const parsedLogs = parseCsvOrTextLog(text, fileName);
+      if (parsedLogs.length > 0) return { logs: parsedLogs, primaryLogIndex: 0 };
+    } catch {
+      // fall through to the other parser
     }
-  }
+    return null;
+  };
 
-  // Parse binary BBL
-  const parsedLogs = parseBinaryBbl(uint8, fileName);
-  if (parsedLogs.length === 0) {
-    // If binary parser found 0 frames, try text parse fallback
-    const textDecoder = new TextDecoder('utf-8');
-    const text = textDecoder.decode(uint8);
-    const textFallback = parseCsvOrTextLog(text, fileName);
-    if (textFallback.length > 0) {
-      return { logs: textFallback, primaryLogIndex: 0 };
+  const parseAsBinary = (): ParseResult | null => {
+    try {
+      const parsedLogs = parseBinaryBbl(uint8, fileName);
+      if (parsedLogs.length > 0) return { logs: parsedLogs, primaryLogIndex: 0 };
+    } catch (e) {
+      // fall through to the other parser
     }
+    return null;
+  };
+
+  if (isTextByExtension || hasUtf8Bom) {
+    const textResult = parseAsText();
+    if (textResult) return textResult;
+    const binaryResult = parseAsBinary();
+    if (binaryResult) return binaryResult;
     throw new Error('블랙박스 데이터 프레임을 찾을 수 없습니다. 올바른 Rotorflight .BBL 또는 .CSV 파일인지 확인해주세요.');
   }
 
-  return { logs: parsedLogs, primaryLogIndex: 0 };
+  // Binary .BBL first (real flight recorder logs), text export fallback
+  const binaryResult = parseAsBinary();
+  if (binaryResult) return binaryResult;
+  const textResult = parseAsText();
+  if (textResult) return textResult;
+  throw new Error('블랙박스 데이터 프레임을 찾을 수 없습니다. 올바른 Rotorflight .BBL 또는 .CSV 파일인지 확인해주세요.');
 }
 
+/** Legacy text sniff kept for reference (no longer used for routing). */
 function checkIfTextLog(bytes: Uint8Array): boolean {
   // Check first 1024 bytes for non-printable characters
   const sampleLen = Math.min(1024, bytes.length);
@@ -350,422 +657,569 @@ function checkIfTextLog(bytes: Uint8Array): boolean {
  */
 export function parseCsvOrTextLog(text: string, fileName: string): BlackboxLog[] {
   const lines = text.split(/\r?\n/);
-  const logs: BlackboxLog[] = [];
+  const headers: Record<string, string> = {};
+  let headerLines: string[] = [];
+  let dataStartIndex = 0;
 
-  let headerFields: string[] = [];
-  let headerMap: Record<string, string> = {};
-  let rawHeaders = '';
-  let rows: number[][] = [];
-  let logIdCounter = 1;
-
-  for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {
-    const line = lines[lineIdx].trim();
-    if (!line) continue;
-
-    if (line.startsWith('H ')) {
-      // Header line
-      rawHeaders += line + '\n';
-      const colonIdx = line.indexOf(':');
-      if (colonIdx > 0) {
-        const key = line.substring(2, colonIdx).trim();
-        const value = line.substring(colonIdx + 1).trim();
-        headerMap[key] = value;
-      }
-    } else if (line.includes(',') && !headerFields.length) {
-      // Column headers line
-      const cols = line.split(',').map(s => s.trim().replace(/"/g, ''));
-      if (cols.some(c => c.toLowerCase().includes('time') || c.toLowerCase().includes('loop'))) {
-        headerFields = cols;
-      }
-    } else if (headerFields.length && line.includes(',')) {
-      // Data row
-      const parts = line.split(',');
-      if (parts.length >= headerFields.length - 2) {
-        const numRow = new Array(parts.length);
-        for (let p = 0; p < parts.length; p++) {
-          const val = parseFloat(parts[p]);
-          numRow[p] = isNaN(val) ? 0 : val;
-        }
-        rows.push(numRow);
-      }
-    }
-  }
-
-  if (rows.length > 50 && headerFields.length > 0) {
-    headerMap['__rawHeaders__'] = rawHeaders;
-    const log = buildLogFromRows(rows, headerFields, headerMap, fileName, logIdCounter);
-    logs.push(log);
-  }
-
-  return logs;
-}
-
-/**
- * Parse Binary .BBL file
- */
-export function parseBinaryBbl(bytes: Uint8Array, fileName: string): BlackboxLog[] {
-  const logs: BlackboxLog[] = [];
-  let offset = 0;
-  let logIdCounter = 1;
-
-  while (offset < bytes.length) {
-    // Look for next log header starting with "H Product:" or "H "
-    const nextLogStart = findHeaderStart(bytes, offset);
-    if (nextLogStart === -1) break;
-
-    offset = nextLogStart;
-    const { headerMap, headerEndOffset } = parseHeadersFromOffset(bytes, offset);
-    offset = headerEndOffset;
-
-    // Field definition for I-frames and P-frames
-    const iFieldNames = (headerMap['Field I name'] || '').split(',').map(s => s.trim()).filter(Boolean);
-    const pFieldNames = (headerMap['Field P name'] || iFieldNames.join(',')).split(',').map(s => s.trim()).filter(Boolean);
-
-    if (iFieldNames.length === 0) {
-      // Advance to avoid infinite loop
-      offset++;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (line.length === 0) continue;
+    if (line.startsWith('#') || line.startsWith('H ')) {
+      const clean = line.replace(/^[#H]\s*/, '');
+      const ci = clean.indexOf(':');
+      if (ci > 0) headers[clean.slice(0, ci).trim()] = clean.slice(ci + 1).trim();
       continue;
     }
-
-    const iSigned = (headerMap['Field I signed'] || '').split(',').map(s => s.trim() === '1');
-    const pSigned = (headerMap['Field P signed'] || '').split(',').map(s => s.trim() === '1');
-    const pPredictors = (headerMap['Field P predictor'] || '').split(',').map(s => parseInt(s.trim(), 10) || 0);
-
-    // Parse frames
-    const rows: number[][] = [];
-    const events: FlightEvent[] = [];
-    let prevFrameValues: number[] = new Array(iFieldNames.length).fill(0);
-    let prevPrevValues: number[] = new Array(iFieldNames.length).fill(0);
-
-    const offsetObj = { offset };
-
-    // Track the last main frame timestamp for accurate event timing
-    let lastMainFrameTimeUs = 0;
-
-    while (offsetObj.offset < bytes.length) {
-      const frameTypeChar = bytes[offsetObj.offset++];
-      if (frameTypeChar === 0x49) {
-        // 'I' - Intra frame (Full state)
-        const frameValues = new Array(iFieldNames.length);
-        let valid = true;
-        for (let f = 0; f < iFieldNames.length; f++) {
-          if (offsetObj.offset >= bytes.length) {
-            valid = false;
-            break;
-          }
-          frameValues[f] = iSigned[f] ? readSVarInt(bytes, offsetObj) : readUVarInt(bytes, offsetObj);
-        }
-        if (valid) {
-          rows.push(frameValues);
-          prevPrevValues = [...prevFrameValues];
-          prevFrameValues = [...frameValues];
-          // Time is at field index 1 (FLIGHT_LOG_FIELD_INDEX_TIME)
-          if (frameValues.length > 1) {
-            lastMainFrameTimeUs = frameValues[1];
-          }
-        }
-      } else if (frameTypeChar === 0x50) {
-        // 'P' - Predicted frame (Delta from predictor)
-        const frameValues = new Array(pFieldNames.length);
-        let valid = true;
-        for (let f = 0; f < pFieldNames.length; f++) {
-          if (offsetObj.offset >= bytes.length) {
-            valid = false;
-            break;
-          }
-          const delta = pSigned[f] ? readSVarInt(bytes, offsetObj) : readUVarInt(bytes, offsetObj);
-          const predType = pPredictors[f] || 1;
-          let predicted = 0;
-          if (predType === 1) {
-            predicted = prevFrameValues[f] || 0;
-          } else if (predType === 2) {
-            // Straight line
-            predicted = 2 * (prevFrameValues[f] || 0) - (prevPrevValues[f] || 0);
-          } else if (predType === 3) {
-            // Average
-            predicted = Math.round(((prevFrameValues[f] || 0) + (prevPrevValues[f] || 0)) / 2);
-          } else if (predType === 8) {
-            predicted = (frameValues[0] || 0) + delta; // motor 0 relative
-          } else if (predType === 10) {
-            predicted = lastMainFrameTimeUs + delta; // time relative
-          } else if (predType === 11) {
-            predicted = (frameValues[0] || 0) + delta;
-          } else {
-            predicted = delta;
-          }
-          frameValues[f] = predicted;
-        }
-        if (valid) {
-          rows.push(frameValues);
-          prevFrameValues = [...frameValues];
-          // Update lastMainFrameTimeUs from predicted time frame (time is at index 1)
-          if (frameValues.length > 1) {
-            lastMainFrameTimeUs = frameValues[1];
-          }
-        }
-      } else if (frameTypeChar === 0x53) {
-        // 'S' - Slow frame
-        // Skip slow frame bytes (read until high bit is cleared for slow fields or skip fixed block)
-        const slowCount = 6;
-        for (let sc = 0; sc < slowCount; sc++) {
-          if (offsetObj.offset >= bytes.length) break;
-          readUVarInt(bytes, offsetObj);
-        }
-      } else if (frameTypeChar === 0x45) {
-        // 'E' - Event frame - use proper parser with correct timestamps
-        const result = parseEventFrame(bytes, offsetObj, lastMainFrameTimeUs);
-        if (result) {
-          events.push({ timeSec: result.timeSec, name: result.name });
-          if (result.endOfLog) {
-            break; // End of this flight log
-          }
-        }
-      } else if (frameTypeChar === 0x48) {
-        // 'H' encountered in stream -> potential start of next log!
-        if (bytes[offsetObj.offset] === 0x20) {
-          // "H " header for next log, step back 1
-          offsetObj.offset--;
-          break;
-        }
-      }
-    }
-
-    offset = offsetObj.offset;
-
-    if (rows.length > 100) {
-      const log = buildLogFromRows(rows, iFieldNames, headerMap, fileName, logIdCounter++, events);
-      logs.push(log);
-    }
+    headerLines = line.split(',').map(s => s.trim().replace(/^\"|\"$/g, ''));
+    dataStartIndex = i + 1;
+    break;
   }
-
-  return logs;
-}
-
-function findHeaderStart(bytes: Uint8Array, startOffset: number): number {
-  for (let i = startOffset; i < bytes.length - 10; i++) {
-    if (bytes[i] === 0x48 && bytes[i + 1] === 0x20) { // "H "
-      return i;
+  if (headerLines.length === 0) throw new Error('CSV 헤더를 찾을 수 없습니다.');
+  const findCol = (...cands: string[]): number => {
+    for (const c of cands) {
+      const ix = headerLines.findIndex(h => h.toLowerCase() === c.toLowerCase());
+      if (ix >= 0) return ix;
     }
-  }
-  return -1;
-}
-
-function parseHeadersFromOffset(bytes: Uint8Array, startOffset: number): { headerMap: Record<string, string>; headerEndOffset: number } {
-  const headerMap: Record<string, string> = {};
-  let i = startOffset;
-  let rawHeaders = '';
-
-  while (i < bytes.length - 2) {
-    if (bytes[i] === 0x48 && bytes[i + 1] === 0x20) {
-      // Find newline
-      let lineEnd = i + 2;
-      while (lineEnd < bytes.length && bytes[lineEnd] !== 0x0a && bytes[lineEnd] !== 0x0d) {
-        lineEnd++;
-      }
-      const lineStr = new TextDecoder('ascii').decode(bytes.subarray(i + 2, lineEnd));
-      rawHeaders += lineStr + '\n';
-      const colon = lineStr.indexOf(':');
-      if (colon > 0) {
-        const key = lineStr.substring(0, colon).trim();
-        const val = lineStr.substring(colon + 1).trim();
-        headerMap[key] = val;
-      }
-      // Skip newline chars
-      i = lineEnd;
-      while (i < bytes.length && (bytes[i] === 0x0a || bytes[i] === 0x0d)) {
-        i++;
-      }
-    } else {
-      // Header section ended
-      break;
-    }
-  }
-
-  headerMap['__rawHeaders__'] = rawHeaders;
-  return { headerMap, headerEndOffset: i };
-}
-
-/**
- * Build clean BlackboxLog object from raw row array
- */
-function buildLogFromRows(
-  rows: number[][],
-  fieldNames: string[],
-  headers: Record<string, string>,
-  fileName: string,
-  logId: number,
-  events: FlightEvent[] = []
-): BlackboxLog {
-  const numFrames = rows.length;
-
-  // Find column indices
-  const findCol = (namePatterns: string[]): number => {
-    for (const pat of namePatterns) {
-      const exact = fieldNames.indexOf(pat);
-      if (exact !== -1) return exact;
-    }
-    for (const pat of namePatterns) {
-      const idx = fieldNames.findIndex(f => f.toLowerCase().includes(pat.toLowerCase()));
-      if (idx !== -1) return idx;
+    for (const c of cands) {
+      const ix = headerLines.findIndex(h => h.toLowerCase().includes(c.toLowerCase()));
+      if (ix >= 0) return ix;
     }
     return -1;
   };
-
-  const timeCol = findCol(['time', 'time_us', 'time (us)', 'loopIteration']);
-  const rollCol = findCol(['gyroADC[0]', 'gyro[0]', 'gyro_roll', 'rollRate']);
-  const pitchCol = findCol(['gyroADC[1]', 'gyro[1]', 'gyro_pitch', 'pitchRate']);
-  const yawCol = findCol(['gyroADC[2]', 'gyro[2]', 'gyro_yaw', 'yawRate']);
-
-  const accXCol = findCol(['accSmooth[0]', 'accADC[0]', 'acc_x', 'accX']);
-  const accYCol = findCol(['accSmooth[1]', 'accADC[1]', 'acc_y', 'accY']);
-  const accZCol = findCol(['accSmooth[2]', 'accADC[2]', 'acc_z', 'accZ']);
-
-  const rpmCol = findCol(['rpm', 'eRPM[0]', 'eRPM', 'rotorRpm', 'debug[0]', 'motor[0]']);
-  const throttleCol = findCol(['rcCommand[3]', 'throttle', 'motor[0]']);
-  const collectiveCol = findCol(['rcCommand[0]', 'pitch_stick', 'collective']);
-  const vbatCol = findCol(['vbatLatest', 'vbat', 'voltage']);
-  const currentCol = findCol(['amperageLatest', 'amperage', 'current']);
-
-  // Extract arrays
-  const timeArray = new Float32Array(numFrames);
-  const rollArray = new Float32Array(numFrames);
-  const pitchArray = new Float32Array(numFrames);
-  const yawArray = new Float32Array(numFrames);
-
-  const accXArray = new Float32Array(numFrames);
-  const accYArray = new Float32Array(numFrames);
-  const accZArray = new Float32Array(numFrames);
-
-  const rpmArray = rpmCol !== -1 ? new Float32Array(numFrames) : undefined;
-  const throttleArray = throttleCol !== -1 ? new Float32Array(numFrames) : undefined;
-  const collectiveArray = collectiveCol !== -1 ? new Float32Array(numFrames) : undefined;
-  const vbatArray = vbatCol !== -1 ? new Float32Array(numFrames) : undefined;
-
-  // Scale factors
-  // Standard gyro scale in cleanflight/rotorflight: 16.4 LSB/deg/s for 2000 dps
-  let gyroScale = 1.0;
-  if (headers['gyro_scale']) {
-    const parsed = parseFloat(headers['gyro_scale']);
-    if (!isNaN(parsed) && parsed > 0 && parsed < 10) {
-      gyroScale = parsed;
-    }
-  } else {
-    // Check if raw values are huge (>1000)
-    let maxAbsGyro = 0;
-    for (let r = 0; r < Math.min(100, numFrames); r++) {
-      if (rollCol !== -1) maxAbsGyro = Math.max(maxAbsGyro, Math.abs(rows[r][rollCol] || 0));
-    }
-    if (maxAbsGyro > 500) {
-      gyroScale = 1.0 / 16.4; // raw MPU/ICM reading to deg/s
-    }
+  const timeIdx = findCol('time', 'time (ms)', 'time(ms)', 'timestamp');
+  const timeIsMs = headerLines[timeIdx]?.toLowerCase().includes('ms') ?? false;
+  const rollIdx = findCol('gyroADC[0]', 'gyro_roll', 'roll');
+  const pitchIdx = findCol('gyroADC[1]', 'gyro_pitch', 'pitch');
+  const yawIdx = findCol('gyroADC[2]', 'gyro_yaw', 'yaw');
+  const accXIdx = findCol('accSmooth[0]', 'accADC[0]', 'acc_x');
+  const accYIdx = findCol('accSmooth[1]', 'accADC[1]', 'acc_y');
+  const accZIdx = findCol('accSmooth[2]', 'accADC[2]', 'acc_z');
+  const rpmIdx = findCol('headspeed', 'eRPM[0]', 'rpm');
+  const tailRpmIdx = findCol('tailspeed');
+  const vbatIdx = findCol('vbatLatest', 'Vbat', 'vbat');
+  const curIdx = findCol('amperageLatest', 'amperage', 'current');
+  const thrIdx = findCol('rcCommand[3]', 'throttle', 'motor[0]');
+  const collIdx = findCol('collective', 'setpoint[3]', 'mixer[3]');
+  const time: number[] = [];
+  const roll: number[] = [];
+  const pitch: number[] = [];
+  const yaw: number[] = [];
+  const accX: number[] = [];
+  const accY: number[] = [];
+  const accZ: number[] = [];
+  const rpmA: number[] = [];
+  const tailA: number[] = [];
+  const vbatA: number[] = [];
+  const curA: number[] = [];
+  const thrA: number[] = [];
+  const collA: number[] = [];
+  const acc1G = parseFloat(headers['acc_1G'] || '2048') || 2048;
+  for (let i = dataStartIndex; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (!line || line.startsWith('#') || line.startsWith('H ')) continue;
+    const cols = line.split(',');
+    if (cols.length < headerLines.length - 2) continue;
+    const num = (ix: number): number => {
+      if (ix < 0 || ix >= cols.length) return 0;
+      const v = parseFloat(cols[ix]);
+      return Number.isFinite(v) ? v : 0;
+    };
+    let t = timeIdx >= 0 ? num(timeIdx) : time.length * 0.001;
+    if (timeIsMs) t = t / 1000;
+    time.push(t);
+    roll.push(rollIdx >= 0 ? num(rollIdx) : 0);
+    pitch.push(pitchIdx >= 0 ? num(pitchIdx) : 0);
+    yaw.push(yawIdx >= 0 ? num(yawIdx) : 0);
+    accX.push(accXIdx >= 0 ? num(accXIdx) / acc1G : 0);
+    accY.push(accYIdx >= 0 ? num(accYIdx) / acc1G : 0);
+    accZ.push(accZIdx >= 0 ? num(accZIdx) / acc1G : 0);
+    if (rpmIdx >= 0) rpmA.push(num(rpmIdx));
+    if (tailRpmIdx >= 0) tailA.push(num(tailRpmIdx));
+    if (vbatIdx >= 0) vbatA.push(num(vbatIdx) / 100);
+    if (curIdx >= 0) curA.push(num(curIdx) / 100);
+    if (thrIdx >= 0) thrA.push(num(thrIdx));
+    if (collIdx >= 0) collA.push(num(collIdx));
   }
-
-  // Accelerometer scale: 1G is typically 2048 or 4096 LSB
-  let acc1G = parseFloat(headers['acc_1G'] || '2048');
-  if (isNaN(acc1G) || acc1G <= 0) acc1G = 2048;
-
-  let firstTimeUs = 0;
-  if (timeCol !== -1 && numFrames > 0) {
-    firstTimeUs = rows[0][timeCol] || 0;
+  if (time.length < 100) throw new Error(`유효한 데이터 행이 부족합니다. (${time.length}행)`);
+  const t0 = time[0];
+  for (let i = 0; i < time.length; i++) time[i] -= t0;
+  const dts: number[] = [];
+  for (let i = 1; i < Math.min(time.length, 5000); i++) {
+    const d = time[i] - time[i - 1];
+    if (d > 0 && d < 1) dts.push(d);
   }
-
-  for (let i = 0; i < numFrames; i++) {
-    const row = rows[i];
-
-    // Time calculation (in seconds from start of log)
-    if (timeCol !== -1) {
-      const rawTime = row[timeCol] || 0;
-      timeArray[i] = (rawTime - firstTimeUs) / 1000000;
-    } else {
-      timeArray[i] = i * 0.0005; // 2kHz assumed if time column missing
-    }
-
-    rollArray[i] = (rollCol !== -1 ? (row[rollCol] || 0) : 0) * gyroScale;
-    pitchArray[i] = (pitchCol !== -1 ? (row[pitchCol] || 0) : 0) * gyroScale;
-    yawArray[i] = (yawCol !== -1 ? (row[yawCol] || 0) : 0) * gyroScale;
-
-    accXArray[i] = (accXCol !== -1 ? (row[accXCol] || 0) : 0) / acc1G;
-    accYArray[i] = (accYCol !== -1 ? (row[accYCol] || 0) : 0) / acc1G;
-    accZArray[i] = (accZCol !== -1 ? (row[accZCol] || 0) : 0) / acc1G;
-
-    if (rpmArray && rpmCol !== -1) {
-      let r = row[rpmCol] || 0;
-      // If eRPM, Rotorflight logs electrical RPM (eRPM = motor poles/2 * motor RPM). Or direct head RPM.
-      if (r > 100000) r = r / 100; // scaling check
-      rpmArray[i] = r;
-    }
-
-    if (throttleArray && throttleCol !== -1) {
-      const thr = row[throttleCol] || 0;
-      // standard throttle 1000 to 2000
-      throttleArray[i] = thr > 900 ? ((thr - 1000) / 10) : thr;
-    }
-
-    if (collectiveArray && collectiveCol !== -1) {
-      collectiveArray[i] = row[collectiveCol] || 0;
-    }
-
-    if (vbatArray && vbatCol !== -1) {
-      const vb = row[vbatCol] || 0;
-      vbatArray[i] = vb > 100 ? vb / 100 : vb;
-    }
-  }
-
-  const durationSec = timeArray[numFrames - 1] - timeArray[0] || (numFrames / 2000);
-  const sampleRateHz = durationSec > 0 ? Math.round(numFrames / durationSec) : 2000;
-  const looptimeUs = headers['looptime'] ? parseInt(headers['looptime'], 10) : Math.round(1000000 / sampleRateHz);
-
-  const rotorflightValidation = validateRotorflightLog(fieldNames, headers, headers['__rawHeaders__']);
-
-  return {
-    id: logId,
-    filename: `${fileName} (로그 #${logId})`,
-    firmwareType: headers['Firmware type'] || headers['firmwareType'] || (rotorflightValidation.isRotorflight ? 'Rotorflight' : 'Betaflight / 멀티로터 드론'),
-    firmwareVersion: headers['Firmware revision'] || headers['Firmware date'] || (rotorflightValidation.isRotorflight ? 'Rotorflight' : 'Non-Rotorflight'),
-    craftName: headers['craftName'] || (rotorflightValidation.isRotorflight ? 'RC Helicopter' : 'Multirotor Drone'),
-    looptimeUs,
-    sampleRateHz: isFinite(sampleRateHz) && sampleRateHz > 0 ? sampleRateHz : 2000,
-    durationSec: Math.max(0.1, durationSec),
-    totalFrames: numFrames,
-    headers,
-    fieldNames,
-    time: timeArray,
-    gyro: {
-      roll: rollArray,
-      pitch: pitchArray,
-      yaw: yawArray,
-    },
-    acc: {
-      x: accXArray,
-      y: accYArray,
-      z: accZArray,
-    },
-    rpm: rpmArray,
-    throttle: throttleArray,
-    collective: collectiveArray,
-    vbat: vbatArray,
-    events,
-    rotorflightValidation,
-  };
+  dts.sort((a, b) => a - b);
+  const medianDt = dts.length > 0 ? dts[Math.floor(dts.length / 2)] : 0.001;
+  const sampleRateHz = Math.round(1 / medianDt);
+  const durationSec = time[time.length - 1] - time[0];
+  const firmwareHeader = headers['Firmware revision'] || headers['firmware'] || headers['Firmware type'] || '';
+  const validation = validateRotorflightLog(headerLines, firmwareHeader);
+  return [{
+    id: 1, filename: fileName,
+    firmwareType: firmwareHeader || 'Unknown',
+    firmwareVersion: firmwareHeader,
+    craftName: headers['Craft name'] || headers['craftName'],
+    looptimeUs: Math.round(1000000 / sampleRateHz),
+    sampleRateHz, durationSec, totalFrames: time.length,
+    headers, fieldNames: headerLines,
+    time: Float32Array.from(time),
+    gyro: { roll: Float32Array.from(roll), pitch: Float32Array.from(pitch), yaw: Float32Array.from(yaw) },
+    acc: { x: Float32Array.from(accX), y: Float32Array.from(accY), z: Float32Array.from(accZ) },
+    rpm: rpmA.length > 0 ? Float32Array.from(rpmA) : undefined,
+    tailRpm: tailA.length > 0 ? Float32Array.from(tailA) : undefined,
+    throttle: thrA.length > 0 ? Float32Array.from(thrA) : undefined,
+    collective: collA.length > 0 ? Float32Array.from(collA) : undefined,
+    vbat: vbatA.length > 0 ? Float32Array.from(vbatA) : undefined,
+    current: curA.length > 0 ? Float32Array.from(curA) : undefined,
+    events: [], rotorflightValidation: validation,
+  }];
 }
 
 /**
- * Compute thorough Vibration Analytics Summary & Diagnostics
+ * Parse Binary .BBL file — reference port (multi-log aware).
  */
-export function analyzeVibrations(log: BlackboxLog, config?: HeliConfig): VibrationSummary {
+function buildBlackboxLog(parsed: ParsedLogData, fileName: string, id: number): BlackboxLog {
+  const { headers, sysConfig, frameDefs, samples, events } = parsed;
+  const n = samples.length;
+  const time = new Float32Array(n);
+  const roll = new Float32Array(n);
+  const pitch = new Float32Array(n);
+  const yaw = new Float32Array(n);
+  const accX = new Float32Array(n);
+  const accY = new Float32Array(n);
+  const accZ = new Float32Array(n);
+  const rpm = new Float32Array(n);
+  const tailRpmArr = new Float32Array(n);
+  const throttle = new Float32Array(n);
+  const vbat = new Float32Array(n);
+  const current = new Float32Array(n);
+  let hasRpm = false, hasTail = false, hasThr = false, hasVbat = false, hasCur = false;
+  const t0 = samples[0].timeUs;
+  for (let i = 0; i < n; i++) {
+    const s = samples[i];
+    time[i] = (s.timeUs - t0) / 1000000;
+    roll[i] = s.gyro[0]; pitch[i] = s.gyro[1]; yaw[i] = s.gyro[2];
+    accX[i] = s.acc[0]; accY[i] = s.acc[1]; accZ[i] = s.acc[2];
+    if (s.headspeed > 0) { rpm[i] = s.headspeed; hasRpm = true; }
+    if (s.tailspeed > 0) { tailRpmArr[i] = s.tailspeed; hasTail = true; }
+    if (s.throttle !== 0) { throttle[i] = s.throttle; hasThr = true; }
+    if (s.vbat !== 0) { vbat[i] = s.vbat; hasVbat = true; }
+    if (s.amperage !== 0) { current[i] = s.amperage; hasCur = true; }
+  }
+  const durationSec = n > 1 ? time[n - 1] - time[0] : 0;
+  const dts: number[] = [];
+  const probe = Math.min(n - 1, 20000);
+  for (let i = 1; i <= probe; i++) {
+    const d = time[i] - time[i - 1];
+    if (d > 0.00005 && d < 1) dts.push(d);
+  }
+  dts.sort((a, b) => a - b);
+  const medianDt = dts.length > 0 ? dts[Math.floor(dts.length / 2)] : sysConfig.looptimeUs / 1000000;
+  const sampleRateHz = Math.max(1, Math.round(1 / medianDt));
+  const firmwareHeader: string = headers['Firmware revision'] || headers['Firmware type'] || sysConfig.firmwareType || '';
+  const fieldNames: string[] = frameDefs.I?.name ?? [];
+  const validation = validateRotorflightLog(fieldNames, firmwareHeader);
+  const flightEvents: FlightEvent[] = events.map(e => ({
+    timeSec: (e.timeUs - t0) / 1000000,
+    name: e.data ? `${e.name} (${e.data})` : e.name,
+  }));
+  return {
+    id, filename: fileName,
+    firmwareType: sysConfig.firmwareType !== 'Unknown' ? sysConfig.firmwareType : (firmwareHeader || 'Rotorflight'),
+    firmwareVersion: sysConfig.firmwareVersion || firmwareHeader,
+    craftName: sysConfig.craftName || headers['Craft name'],
+    looptimeUs: sysConfig.looptimeUs, sampleRateHz, durationSec, totalFrames: n,
+    headers, fieldNames, time,
+    gyro: { roll, pitch, yaw }, acc: { x: accX, y: accY, z: accZ },
+    rpm: hasRpm ? rpm : undefined,
+    tailRpm: hasTail ? tailRpmArr : undefined,
+    throttle: hasThr ? throttle : undefined,
+    vbat: hasVbat ? vbat : undefined,
+    current: hasCur ? current : undefined,
+    events: flightEvents, rotorflightValidation: validation,
+  };
+}
+
+// Splits multi-log files at every start marker (FlightLogIndex behaviour).
+export function parseBinaryBbl(bytes: Uint8Array, fileName: string): BlackboxLog[] {
+  const marker = new TextEncoder().encode(START_MARKER_TEXT);
+  const logBegins: number[] = [];
+  {
+    const scan = new ByteStream(bytes);
+    for (;;) {
+      const off = scan.nextOffsetOf(marker);
+      if (off === -1) break;
+      logBegins.push(off);
+      scan.pos = off + marker.length;
+      if (logBegins.length > 64) break;
+    }
+  }
+  if (logBegins.length === 0) logBegins.push(0);
+  const logEnds = logBegins.map((_, i) => (i + 1 < logBegins.length ? logBegins[i + 1] : bytes.length));
+  const logs: BlackboxLog[] = [];
+  for (let li = 0; li < logBegins.length; li++) {
+    try {
+      const parsed = parseSingleBinaryLog(bytes, logBegins[li], logEnds[li]);
+      if (!parsed || parsed.samples.length < 10) continue;
+      const log = buildBlackboxLog(parsed, fileName, li + 1);
+      if (log.totalFrames >= 10) logs.push(log);
+    } catch (e) { console.warn(`BBL log #${li + 1} parse failed:`, e); continue; }
+  }
+  if (logs.length === 0) {
+    throw new Error('BBL 파일에서 유효한 비행 로그를 찾을 수 없습니다. Rotorflight 블랙박스 파일(.BBL)이 맞는지 확인해주세요.');
+  }
+  logs.forEach((l, i) => { l.id = i + 1; });
+  return logs;
+}
+interface MainSample {
+  timeUs: number; iteration: number;
+  gyro: [number, number, number]; acc: [number, number, number];
+  headspeed: number; tailspeed: number; motor: number;
+  vbat: number; amperage: number; throttle: number;
+}
+interface ParsedLogData {
+  headers: Record<string, string>; sysConfig: SysConfig;
+  frameDefs: Record<string, FrameDef>; samples: MainSample[];
+  events: { timeUs: number; name: string; data?: string }[];
+}
+
+function applyHeaderField(
+  fieldName: string, fieldValue: string, sys: SysConfig,
+  frameDefs: Record<string, FrameDef>, headers: Record<string, string>
+): void {
+  switch (fieldName) {
+    case 'I interval': sys.frameIntervalI = Math.max(1, parseInt(fieldValue, 10) || 32); break;
+    case 'P interval': {
+      const m = fieldValue.match(/(\d+)\/(\d+)/);
+      if (m) { sys.frameIntervalPNum = parseInt(m[1], 10); sys.frameIntervalPDenom = parseInt(m[2], 10); }
+      else { sys.frameIntervalPNum = 1; sys.frameIntervalPDenom = parseInt(fieldValue, 10) || 1; }
+      break;
+    }
+    case 'Data version': sys.dataVersion = parseInt(fieldValue, 10) || 2; break;
+    case 'looptime': sys.looptimeUs = parseInt(fieldValue, 10) || sys.looptimeUs; break;
+    case 'gyro_scale': case 'gyro.scale': {
+      const f = hexToFloat(fieldValue);
+      if (Number.isFinite(f) && f !== 0) sys.gyroScale = f; break;
+    }
+    case 'acc_1G': sys.acc1G = parseInt(fieldValue, 10) || sys.acc1G; break;
+    case 'minthrottle':
+      sys.minthrottle = parseInt(fieldValue, 10) || sys.minthrottle;
+      sys.motorOutputMin = sys.minthrottle; break;
+    case 'maxthrottle': sys.maxthrottle = parseInt(fieldValue, 10) || sys.maxthrottle; break;
+    case 'motorOutput': {
+      const parts = parseCommaList(fieldValue);
+      if (parts.length > 0 && parts[0] !== 0) sys.motorOutputMin = parts[0]; break;
+    }
+    case 'vbatref': sys.vbatref = parseInt(fieldValue, 10) || sys.vbatref; break;
+    case 'vbatscale': sys.vbatscale = parseInt(fieldValue, 10) || sys.vbatscale; break;
+    case 'Firmware revision': {
+      const m = fieldValue.match(/(.*flight).* (\d+)\.(\d+)(\.(\d+))*/i);
+      if (m) {
+        sys.firmwareType = m[1].toLowerCase() === 'rotorflight' ? 'Rotorflight' : m[1];
+        sys.firmwareVersion = `${m[2]}.${m[3]}.${m[5] ?? '0'}`;
+      }
+      headers['Firmware revision'] = fieldValue; break;
+    }
+    case 'Firmware type':
+      if (/rotorflight/i.test(fieldValue)) sys.firmwareType = 'Rotorflight';
+      else if (fieldValue) sys.firmwareType = fieldValue; break;
+    case 'Craft name': sys.craftName = fieldValue; break;
+    default: {
+      const m = fieldName.match(/^Field (.) (.+)$/);
+      if (m) {
+        const frameName = m[1]; const info = m[2];
+        if (!frameDefs[frameName]) frameDefs[frameName] = emptyFrameDef();
+        const def = frameDefs[frameName];
+        if (info === 'predictor') def.predictor = parseCommaList(fieldValue);
+        else if (info === 'encoding') def.encoding = parseCommaList(fieldValue);
+        else if (info === 'name') {
+          def.name = fieldValue.split(',').map(s => s.replace(/^gyroData(.+)$/, 'gyroADC$1'));
+          def.count = def.name.length; def.nameToIndex = {};
+          def.name.forEach((n, ix) => { def.nameToIndex[n] = ix; });
+          def.signed.length = def.count;
+        } else if (info === 'signed') def.signed = parseCommaList(fieldValue);
+      }
+      break;
+    }
+  }
+}
+
+function parseSingleBinaryLog(bytes: Uint8Array, logStart: number, logEnd: number): ParsedLogData | null {
+  const stream = new ByteStream(bytes, logStart, logEnd);
+  const headers: Record<string, string> = {};
+  const frameDefs: Record<string, FrameDef> = {};
+  const sys: SysConfig = {
+    firmwareType: 'Unknown', firmwareVersion: '', craftName: '',
+    looptimeUs: 500, gyroScale: 1.0, acc1G: 2048,
+    minthrottle: 1150, maxthrottle: 2000, motorOutputMin: 1150,
+    vbatref: 4095, vbatscale: 110,
+    frameIntervalI: 32, frameIntervalPNum: 1, frameIntervalPDenom: 1, dataVersion: 2,
+  };
+  const NEWLINE = 10, COLON = 58;
+  const isFrameChar = (c: string | number): boolean =>
+    c === 'I' || c === 'P' || c === 'G' || c === 'H' || c === 'S' || c === 'E';
+  headerLoop:
+  while (true) {
+    const cmd = stream.readChar();
+    if (cmd === -1) break;
+    if (cmd === 'H') {
+      if (stream.peekChar() !== ' ') continue;
+      stream.readChar();
+      const lineStart = stream.pos;
+      let sepPos = -1, lineEnd = -1;
+      for (; stream.pos < lineStart + 4096 && stream.pos < stream.end; stream.pos++) {
+        const b = stream.data[stream.pos];
+        if (sepPos === -1 && b === COLON) sepPos = stream.pos;
+        if (b === NEWLINE || b === 0) { lineEnd = stream.pos; break; }
+      }
+      if (lineEnd === -1 || sepPos === -1) continue;
+      const dec = new TextDecoder('utf-8', { fatal: false });
+      const fn = dec.decode(bytes.subarray(lineStart, sepPos));
+      const fv = dec.decode(bytes.subarray(sepPos + 1, lineEnd));
+      stream.pos = lineEnd + 1;
+      headers[fn] = fv;
+      applyHeaderField(fn, fv, sys, frameDefs, headers);
+    } else if (isFrameChar(cmd)) { stream.unread(); break headerLoop; }
+  }
+  let defI = frameDefs.I;
+  let defP = frameDefs.P;
+  if (!defI || defI.count === 0 || defI.predictor.length !== defI.count || defI.encoding.length !== defI.count) {
+    throw new Error('I 프레임 정의가 없어 로그 헤더가 손상되었습니다.');
+  }
+  if (!defP) throw new Error('P 프레임 정의가 없어 로그 헤더가 손상되었습니다.');
+  defP = frameDefs.P = {
+    name: defI.name, nameToIndex: defI.nameToIndex, count: defI.count,
+    signed: defI.signed, predictor: defP.predictor, encoding: defP.encoding,
+  };
+  if (defP.predictor.length !== defP.count || defP.encoding.length !== defP.count) {
+    throw new Error('P 프레임 정의가 불완전합니다.');
+  }
+  defI = frameDefs.I;
+  const defG = frameDefs.G;
+  if (defG) {
+    for (let i = 1; i < defG.count; i++) {
+      if (defG.predictor[i - 1] === PREDICTOR_HOME_COORD && defG.predictor[i] === PREDICTOR_HOME_COORD) {
+        defG.predictor[i] = PREDICTOR_HOME_COORD_1;
+      }
+    }
+  }
+
+  const samples: MainSample[] = [];
+  const events: { timeUs: number; name: string; data?: string }[] = [];
+  const FRAME_CHARS = new Set(['I', 'P', 'G', 'H', 'S', 'E']);
+  let main0: number[] = new Array(defI.count).fill(0);
+  let main1: number[] | null = null;
+  let main2: number[] | null = null;
+  let lastMainFrameTime = -1;
+  let lastMainFrameIteration = -1;
+  let mainStreamValid = false;
+  let gpsHome1: number[] | null = null;
+  const idxTime = 1, idxIter = 0;
+  const fidx = (n: string): number => defI.nameToIndex[n] ?? -1;
+  const iGyro = [fidx('gyroADC[0]'), fidx('gyroADC[1]'), fidx('gyroADC[2]')];
+  const iAcc = [fidx('accSmooth[0]'), fidx('accSmooth[1]'), fidx('accSmooth[2]')];
+  const iAccAlt = [fidx('accADC[0]'), fidx('accADC[1]'), fidx('accADC[2]')];
+  const iHead = fidx('headspeed');
+  const iTail = fidx('tailspeed');
+  const iMotor = fidx('motor[0]');
+  const iVbat = fidx('Vbat');
+  const iAmp = fidx('amperageLatest') >= 0 ? fidx('amperageLatest') : fidx('Ibat');
+  const iThr = fidx('rcCommand[3]');
+  const useAltAcc = iAcc[0] < 0 && iAccAlt[0] >= 0;
+  const pushSample = (frame: number[]): void => {
+    const g = (k: number): number => {
+      const fi = iGyro[k]; return fi >= 0 ? frame[fi] * sys.gyroScale : 0;
+    };
+    const a = (k: number): number => {
+      const fi = useAltAcc ? iAccAlt[k] : iAcc[k];
+      return fi >= 0 ? frame[fi] / sys.acc1G : 0;
+    };
+    samples.push({
+      timeUs: frame[idxTime], iteration: frame[idxIter],
+      gyro: [g(0), g(1), g(2)], acc: [a(0), a(1), a(2)],
+      headspeed: iHead >= 0 ? frame[iHead] : 0,
+      tailspeed: iTail >= 0 ? frame[iTail] : 0,
+      motor: iMotor >= 0 ? frame[iMotor] : 0,
+      vbat: iVbat >= 0 ? frame[iVbat] / 100 : 0,
+      amperage: iAmp >= 0 ? frame[iAmp] / 100 : 0,
+      throttle: iThr >= 0 ? frame[iThr] : 0,
+    });
+  };
+  const completeIntra = (frame: number[]): boolean => {
+    if (lastMainFrameIteration !== -1) {
+      if (
+        frame[idxIter] < lastMainFrameIteration ||
+        frame[idxIter] > lastMainFrameIteration + MAX_ITER_JUMP ||
+        frame[idxTime] < lastMainFrameTime ||
+        frame[idxTime] > lastMainFrameTime + MAX_TIME_JUMP_US
+      ) { mainStreamValid = false; return false; }
+    }
+    mainStreamValid = true;
+    lastMainFrameIteration = frame[idxIter];
+    lastMainFrameTime = frame[idxTime];
+    pushSample(frame);
+    // Reference (flightlog_parser.js completeIntraframe): after an I-frame, BOTH
+    // previous and previous-previous become the I-frame, because we can't look
+    // further into the past than the I-frame. Rotating in the stale main1 instead
+    // makes the P-frame straight-line/average predictions overshoot by up to one
+    // I-interval, which then makes every following I-frame look like time went
+    // backwards and destroys the main stream (massive frame loss).
+    main2 = main0; main1 = main0; main0 = new Array(defI.count).fill(0);
+    return true;
+  };
+  const completeInter = (frame: number[]): boolean => {
+    if (
+      !mainStreamValid ||
+      frame[idxTime] > lastMainFrameTime + MAX_TIME_JUMP_US ||
+      frame[idxIter] > lastMainFrameIteration + MAX_ITER_JUMP
+    ) { mainStreamValid = false; return false; }
+    lastMainFrameIteration = frame[idxIter];
+    lastMainFrameTime = frame[idxTime];
+    pushSample(frame);
+    main2 = main1; main1 = main0; main0 = new Array(defI.count).fill(0);
+    return true;
+  };
+
+  let pendingType: string | null = null;
+  let frameStart = 0;
+  let lastDecoded: number[] = [];
+  let lastEvent: { type: number; timeUs: number; data: string } | null = null;
+  let resumeIter: number | null = null;
+  let resumeTime: number | null = null;
+  const completeEvent = (): void => {
+    if (!lastEvent) return;
+    const ev = lastEvent; lastEvent = null;
+    if (ev.type === EVT_LOGGING_RESUME) {
+      if (resumeIter !== null) lastMainFrameIteration = resumeIter;
+      if (resumeTime !== null) lastMainFrameTime = resumeTime;
+    }
+    const nm = FLIGHT_EVENT_NAMES[ev.type] ?? `Event #${ev.type}`;
+    events.push({ timeUs: ev.timeUs, name: nm, data: ev.data || undefined });
+  };
+  const parseEventPayload = (): { type: number; timeUs: number; data: string } | null => {
+    const type = stream.readByte();
+    if (type === -1 || stream.eof) return null;
+    let timeUs = lastMainFrameTime >= 0 ? lastMainFrameTime : 0;
+    let data = '';
+    resumeIter = null; resumeTime = null;
+    switch (type) {
+      case EVT_SYNC_BEEP:
+        timeUs = stream.readUnsignedVB(); data = `t=${(timeUs / 1000000).toFixed(2)}s`; break;
+      case EVT_INFLIGHT_ADJUSTMENT: {
+        const fn = stream.readByte(); const vv = stream.readSignedVB();
+        data = `func=${fn} val=${vv}`; break;
+      }
+      case EVT_LOGGING_RESUME: {
+        const li = stream.readUnsignedVB(); const ct = stream.readUnsignedVB();
+        resumeIter = li; resumeTime = ct; timeUs = ct;
+        data = `iter=${li} t=${(ct / 1000000).toFixed(2)}s`; break;
+      }
+      case EVT_DISARM: data = `reason=${stream.readUnsignedVB()}`; break;
+      case EVT_FLIGHT_MODE: {
+        const f = stream.readUnsignedVB(); const lf = stream.readUnsignedVB();
+        data = `0x${f.toString(16)} (prev 0x${lf.toString(16)})`; break;
+      }
+      case EVT_GOVERNOR_STATE: case EVT_RESCUE_STATE: case EVT_AIRBORNE_STATE:
+        data = `state=${stream.readUnsignedVB()}`; break;
+      case EVT_CUSTOM_DATA: {
+        const a = stream.readByte(); const b = stream.readByte();
+        if (a !== -1 && b !== -1) data = new TextDecoder().decode(new Uint8Array([a, b])); break;
+      }
+      case EVT_CUSTOM_STRING: {
+        const arr: number[] = [];
+        for (let k = 0; k < 64; k++) {
+          const ch = stream.readByte();
+          if (ch === -1 || ch === 0) break;
+          arr.push(ch);
+        }
+        data = new TextDecoder().decode(new Uint8Array(arr)); break;
+      }
+      case EVT_LOG_END: data = 'End of log'; break;
+      default: data = ''; break;
+    }
+    if (stream.eof) return null;
+    return { type, timeUs, data };
+  };
+  const finishPending = (nextCmd: string | number): void => {
+    if (!pendingType) return;
+    const frameSize = stream.pos - frameStart;
+    const looksCompleted = nextCmd === -1 || (typeof nextCmd === 'string' && FRAME_CHARS.has(nextCmd));
+    if (frameSize <= 256 && looksCompleted) {
+      if (pendingType === 'I') completeIntra(lastDecoded);
+      else if (pendingType === 'P') completeInter(lastDecoded);
+      else if (pendingType === 'E') completeEvent();
+    } else {
+      mainStreamValid = false;
+      stream.pos = frameStart + 1; stream.eof = false;
+      pendingType = null; return;
+    }
+    pendingType = null;
+  };
+
+  for (;;) {
+    const cmd = stream.readChar();
+    if (pendingType) {
+      if (cmd !== -1) stream.unread();
+      finishPending(cmd);
+      if (stream.eof && pendingType === null && cmd === -1) break;
+      continue;
+    }
+    if (cmd === -1) break;
+    if (typeof cmd !== 'string' || !FRAME_CHARS.has(cmd)) { mainStreamValid = false; continue; }
+    if (cmd === 'I' || cmd === 'P' || cmd === 'S' || cmd === 'G' || cmd === 'H') {
+      const def = frameDefs[cmd];
+      if (!def) { mainStreamValid = false; continue; }
+      frameStart = stream.pos - 1;
+      const prev = main1;
+      const prev2 = cmd === 'I' ? null : main2;
+      const skipped = cmd === 'P' ? countSkipped(lastMainFrameIteration, sys) : 0;
+      const ok = decodeFrame(stream, def, main0, prev, prev2, skipped, sys, frameDefs, gpsHome1, main1 ? main1[idxTime] : null);
+      if (!ok || stream.eof) {
+        mainStreamValid = false; pendingType = null;
+        if (stream.eof) break;
+        continue;
+      }
+      lastDecoded = main0.slice();
+      if (cmd === 'H') gpsHome1 = main0.slice();
+      pendingType = cmd;
+    } else if (cmd === 'E') {
+      frameStart = stream.pos - 1;
+      const ev = parseEventPayload();
+      if (!ev) {
+        if (stream.eof) break;
+        mainStreamValid = false; continue;
+      }
+      lastEvent = ev; pendingType = 'E';
+    }
+  }
+  if (pendingType) finishPending(-1);
+  if (samples.length === 0) return null;
+  return { headers, sysConfig: sys, frameDefs, samples, events };
+}
+
+export function analyzeVibrations(
+  log: BlackboxLog,
+  config?: HeliConfig,
+  window?: { startSec: number; endSec: number }
+): VibrationSummary {
+  // Optional analysis window: 0 → full log, or the selected FFT segment only
+  const n = log.totalFrames;
+  const n0 = window ? Math.max(0, Math.min(n - 1, Math.floor(window.startSec * log.sampleRateHz))) : 0;
+  const n1 = window ? Math.max(n0 + 1, Math.min(n, Math.ceil(window.endSec * log.sampleRateHz))) : n;
+
   // 1. Calculate RMS vibration
   const calcRms = (data: Float32Array): number => {
     let sumSq = 0;
     // Remove DC mean
     let sum = 0;
-    for (let i = 0; i < data.length; i++) sum += data[i];
-    const mean = sum / data.length;
+    for (let i = n0; i < n1; i++) sum += data[i];
+    const mean = sum / (n1 - n0);
 
-    for (let i = 0; i < data.length; i++) {
+    for (let i = n0; i < n1; i++) {
       const diff = data[i] - mean;
       sumSq += diff * diff;
     }
-    return Math.sqrt(sumSq / data.length);
+    return Math.sqrt(sumSq / (n1 - n0));
   };
 
   const rollRms = calcRms(log.gyro.roll);
@@ -778,23 +1232,23 @@ export function analyzeVibrations(log: BlackboxLog, config?: HeliConfig): Vibrat
   const accZRms = calcRms(log.acc.z);
   const overallAccRms = Math.sqrt((accXRms * accXRms + accYRms * accYRms + accZRms * accZRms) / 3);
 
-  // Peak gyro rates
+  // Peak gyro rates (within analysis window)
   let maxRoll = 0;
   let maxPitch = 0;
   let maxYaw = 0;
-  for (let i = 0; i < log.gyro.roll.length; i++) {
+  for (let i = n0; i < n1; i++) {
     if (Math.abs(log.gyro.roll[i]) > maxRoll) maxRoll = Math.abs(log.gyro.roll[i]);
     if (Math.abs(log.gyro.pitch[i]) > maxPitch) maxPitch = Math.abs(log.gyro.pitch[i]);
     if (Math.abs(log.gyro.yaw[i]) > maxYaw) maxYaw = Math.abs(log.gyro.yaw[i]);
   }
 
-  // 2. Estimate Head Speed RPM
+  // 2. Estimate Head Speed RPM (within analysis window)
   let detectedHeadSpeedRpm = config?.mainRpm || 2100;
   if (log.rpm && log.rpm.length > 0) {
     // Find average non-zero RPM during flight
     let sumRpm = 0;
     let countRpm = 0;
-    for (let i = 0; i < log.rpm.length; i++) {
+    for (let i = n0; i < n1; i++) {
       const r = log.rpm[i];
       if (r > 800 && r < 5000) {
         sumRpm += r;
@@ -813,8 +1267,8 @@ export function analyzeVibrations(log: BlackboxLog, config?: HeliConfig): Vibrat
   const motorRatio = (config?.mainGearTeeth || 110) / (config?.motorPinionTeeth || 11);
   const motor1P = main1P * motorRatio;
 
-  // 3. Compute FFT & find dominant peaks
-  const fft = computeMultiAxisFft(log.gyro, log.acc, log.sampleRateHz);
+  // 3. Compute FFT & find dominant peaks (within analysis window)
+  const fft = computeMultiAxisFft(log.gyro, log.acc, log.sampleRateHz, n0, n1);
   const peaks = findVibrationPeaks(fft, detectedHeadSpeedRpm, tailRatio);
 
   // 4. Determine overall vibration grade

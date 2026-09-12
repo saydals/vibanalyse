@@ -1,0 +1,1 @@
+if('serviceWorker' in navigator) navigator.serviceWorker.register('/vibanalyse/dev-sw.js?dev-sw', { scope: '/vibanalyse/', type: 'classic' })

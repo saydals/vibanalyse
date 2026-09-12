@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import { BlackboxLog, HeliConfig, VibrationSummary, FftResult } from './types/blackbox';
 import { Header } from './components/Header';
 import { FileUploader } from './components/FileUploader';
@@ -8,18 +8,32 @@ import { TimeDomainView } from './components/TimeDomainView';
 import { HarmonicsTuningAdvisor } from './components/HarmonicsTuningAdvisor';
 import { NonRotorflightNotice } from './components/NonRotorflightNotice';
 import { OfflineIndicator } from './components/OfflineIndicator';
-import { generateSampleFlightLog } from './utils/sampleData';
+import { DEFAULT_SAMPLE, REAL_SAMPLES, fetchSampleLogs } from './utils/samples';
 import { computeMultiAxisFft } from './utils/fft';
-import { analyzeVibrations } from './utils/blackboxParser';
+import { analyzeVibrations, MIN_ANALYSIS_SEC } from './utils/blackboxParser';
 import { useTheme } from './context/ThemeContext';
-import { Activity, Sliders, UploadCloud, ShieldAlert, Sparkles } from 'lucide-react';
+import { Activity, Sliders, UploadCloud, ShieldAlert, Sparkles, Loader2 } from 'lucide-react';
+
+function emptyFftResult(): FftResult {
+  return {
+    frequencies: new Float32Array(512),
+    roll: new Float32Array(512),
+    pitch: new Float32Array(512),
+    yaw: new Float32Array(512),
+    accX: new Float32Array(512),
+    accY: new Float32Array(512),
+    accZ: new Float32Array(512),
+    sampleRate: 2000,
+  };
+}
 
 export default function App() {
   const { theme } = useTheme();
   const isDark = theme === 'dark';
 
-  // Initial state with pre-loaded clean helicopter log for instant preview
-  const [logs, setLogs] = useState<BlackboxLog[]>(() => [generateSampleFlightLog('clean')]);
+  // Start with no log; auto-load the bundled real Rotorflight sample (.bbl) on mount
+  const [logs, setLogs] = useState<BlackboxLog[]>([]);
+  const [sampleError, setSampleError] = useState<string | null>(null);
   const [currentLogIndex, setCurrentLogIndex] = useState<number>(0);
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [showUploaderModal, setShowUploaderModal] = useState<boolean>(false);
@@ -30,10 +44,27 @@ export default function App() {
   const currentLog = logs[currentLogIndex] || logs[0];
   const isRotorflight = currentLog?.rotorflightValidation?.isRotorflight ?? true;
 
+  const loadRealSample = useCallback(async (sampleId: string = DEFAULT_SAMPLE.id) => {
+    const sample = REAL_SAMPLES.find(s => s.id === sampleId) ?? DEFAULT_SAMPLE;
+    setSampleError(null);
+    try {
+      const loaded = await fetchSampleLogs(sample);
+      setLogs(loaded);
+      setCurrentLogIndex(0);
+      setShowUploaderModal(false);
+    } catch (e: any) {
+      console.error(e);
+      setSampleError(e?.message || '샘플 로그를 불러오지 못했습니다.');
+    }
+  }, []);
+
+  // Auto-load the bundled real sample log once
+  useEffect(() => { loadRealSample(); }, [loadRealSample]);
+
   // Selected FFT Window in seconds
   const [selectedWindow, setSelectedWindow] = useState<{ start: number; end: number }>(() => ({
     start: 0,
-    end: currentLog?.durationSec || 15,
+    end: currentLog?.durationSec || 30,
   }));
 
   // Current playhead time
@@ -74,19 +105,12 @@ export default function App() {
     }
   }, [currentLog, isRotorflight]);
 
-  // Compute FFT on the selected time window (only if Rotorflight)
+  // 로그 전체 길이가 MIN_ANALYSIS_SEC 미만이면 진동 분석을 하지 않는다.
+  // (빠른 구간 선택/수동 선택과 무관하게 30초 미만 로그는 분석 대상이 아니다.)
+  const logTooShort = !!currentLog && currentLog.durationSec < MIN_ANALYSIS_SEC;
   const activeFft = useMemo<FftResult>(() => {
-    if (!currentLog || !isRotorflight) {
-      return {
-        frequencies: new Float32Array(512),
-        roll: new Float32Array(512),
-        pitch: new Float32Array(512),
-        yaw: new Float32Array(512),
-        accX: new Float32Array(512),
-        accY: new Float32Array(512),
-        accZ: new Float32Array(512),
-        sampleRate: 2000,
-      };
+    if (!currentLog || !isRotorflight || logTooShort) {
+      return emptyFftResult();
     }
 
     const startIdx = Math.max(0, Math.floor(selectedWindow.start * currentLog.sampleRateHz));
@@ -100,7 +124,7 @@ export default function App() {
       endIdx,
       1024
     );
-  }, [currentLog, selectedWindow, isRotorflight]);
+  }, [currentLog, selectedWindow, isRotorflight, logTooShort]);
 
   // Compute Overall Vibration Summary (only if Rotorflight)
   const vibrationSummary = useMemo<VibrationSummary>(() => {
@@ -116,8 +140,25 @@ export default function App() {
         diagnostics: [],
       };
     }
-    return analyzeVibrations(currentLog, heliConfig);
-  }, [currentLog, heliConfig, isRotorflight]);
+    if (logTooShort) {
+      return {
+        gyroRms: { roll: 0, pitch: 0, yaw: 0, overall: 0 },
+        accRms: { x: 0, y: 0, z: 0, overall: 0 },
+        gyroPeak: { roll: 0, pitch: 0, yaw: 0 },
+        overallGrade: 'EXCELLENT',
+        detectedHeadSpeedRpm: 2100,
+        harmonics: { main1P: 35, main2P: 70, tail1P: 155, motor1P: 350 },
+        peaks: [],
+        diagnostics: [{
+          type: 'warning',
+          title: `비행 기록이 ${MIN_ANALYSIS_SEC}초 미만이므로 분석하지 않습니다`,
+          description: `이 로그의 비행 구간은 ${currentLog.durationSec.toFixed(1)}초입니다. 신뢰할 수 있는 진동 분석을 위해서는 최소 ${MIN_ANALYSIS_SEC}초 이상의 비행 기록이 필요합니다.`,
+          action: '더 긴 비행 로그를 불러오거나, 새로 비행하여 블랙박스를 기록하세요.',
+        }],
+      };
+    }
+    return analyzeVibrations(currentLog, heliConfig, selectedWindow);
+  }, [currentLog, heliConfig, isRotorflight, logTooShort, selectedWindow]);
 
   const handleLogLoaded = (newLogs: BlackboxLog[]) => {
     setLogs(newLogs);
@@ -141,13 +182,38 @@ export default function App() {
 
       {/* Main Content Area */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 py-5 flex flex-col gap-5">
-        {/* If the current log is NOT Rotorflight, display rejection notice and DO NOT ANALYZE */}
-        {!isRotorflight ? (
+        {/* Sample log is still loading / failed */}
+        {!currentLog ? (
+          <div
+            className={`flex flex-col items-center justify-center gap-3 rounded-3xl border p-12 text-center transition-colors ${
+              isDark ? 'bg-slate-900/80 border-slate-800' : 'bg-white border-slate-200'
+            }`}
+          >
+            <Loader2 className={`w-8 h-8 animate-spin ${sampleError ? 'text-rose-500' : 'text-cyan-500'}`} />
+            {sampleError ? (
+              <>
+                <p className={`text-sm font-semibold ${isDark ? 'text-rose-300' : 'text-rose-600'}`}>{sampleError}</p>
+                <button
+                  onClick={() => loadRealSample()}
+                  className={`px-4 py-2 rounded-xl text-xs font-bold cursor-pointer transition ${
+                    isDark ? 'bg-cyan-600 hover:bg-cyan-500 text-white' : 'bg-cyan-600 hover:bg-cyan-500 text-white'
+                  }`}
+                >
+                  샘플 로그 다시 불러오기
+                </button>
+              </>
+            ) : (
+              <p className={`text-sm font-semibold ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>
+                실제 Rotorflight 블랙박스 샘플 로그({DEFAULT_SAMPLE.title})를 불러오는 중...
+              </p>
+            )}
+          </div>
+        ) : !isRotorflight ? (
           <div className="flex flex-col gap-4">
             <NonRotorflightNotice
               log={currentLog}
               onOpenNewFile={() => setShowUploaderModal(true)}
-              onLoadValidSample={() => handleLogLoaded([generateSampleFlightLog('clean')])}
+              onLoadValidSample={() => loadRealSample()}
             />
           </div>
         ) : (
@@ -228,6 +294,11 @@ export default function App() {
                   headSpeedRpm={heliConfig.mainRpm}
                   config={heliConfig}
                   activeWindowSec={selectedWindow}
+                  analysisNotice={
+                    logTooShort
+                      ? `비행 기록 ${currentLog.durationSec.toFixed(1)}초 — 최소 ${MIN_ANALYSIS_SEC}초가 못 되어 분석하지 않습니다.`
+                      : null
+                  }
                 />
 
                 {/* Time Domain Timeline & Window Selection */}
@@ -255,6 +326,11 @@ export default function App() {
                   headSpeedRpm={heliConfig.mainRpm}
                   config={heliConfig}
                   activeWindowSec={selectedWindow}
+                  analysisNotice={
+                    logTooShort
+                      ? `비행 기록 ${currentLog.durationSec.toFixed(1)}초 — 최소 ${MIN_ANALYSIS_SEC}초가 못 되어 분석하지 않습니다.`
+                      : null
+                  }
                 />
               </div>
             )}

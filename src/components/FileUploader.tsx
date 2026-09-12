@@ -1,7 +1,7 @@
 import React, { useState, useRef } from 'react';
-import { UploadCloud, AlertCircle, Sparkles, HardDrive, CheckCircle2, XCircle } from 'lucide-react';
-import { generateSampleFlightLog, SampleType } from '../utils/sampleData';
+import { UploadCloud, AlertCircle, Sparkles, HardDrive } from 'lucide-react';
 import { parseBlackboxFile } from '../utils/blackboxParser';
+import { REAL_SAMPLES, fetchSampleLogs, RealSample } from '../utils/samples';
 import { BlackboxLog } from '../types/blackbox';
 import { useTheme } from '../context/ThemeContext';
 
@@ -43,14 +43,18 @@ export const FileUploader: React.FC<FileUploaderProps> = ({
     }
   };
 
-  const loadSample = (sampleType: SampleType) => {
+  const loadSample = async (sample: RealSample) => {
     setErrorMessage(null);
     setIsLoading(true);
-    setTimeout(() => {
-      const log = generateSampleFlightLog(sampleType);
-      onLogLoaded([log], log.filename);
+    try {
+      const logs = await fetchSampleLogs(sample);
+      onLogLoaded(logs, sample.file);
+    } catch (err: any) {
+      console.error(err);
+      setErrorMessage(err?.message || '샘플 로그를 불러오는 중 오류가 발생했습니다.');
+    } finally {
       setIsLoading(false);
-    }, 200);
+    }
   };
 
   return (
@@ -185,133 +189,64 @@ export const FileUploader: React.FC<FileUploaderProps> = ({
         </div>
 
         <div className="mt-3 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
-          {/* Sample 1: Clean */}
-          <button
-            onClick={() => loadSample('clean')}
-            className={`p-3.5 rounded-xl border text-left transition group flex flex-col justify-between gap-2 cursor-pointer ${
-              isDark
-                ? 'bg-slate-950/60 hover:bg-slate-800/80 border-slate-800 hover:border-emerald-500/50'
-                : 'bg-slate-50 hover:bg-emerald-50/50 border-slate-200 hover:border-emerald-400'
-            }`}
-          >
-            <div>
-              <div className="flex items-center justify-between">
-                <span className="px-2 py-0.5 rounded bg-emerald-500/10 border border-emerald-500/30 text-emerald-600 dark:text-emerald-400 text-[11px] font-bold">
-                  정상 / 클린 비행
-                </span>
-                <span className="text-[10px] text-slate-400 font-mono">2300 RPM</span>
-              </div>
-              <h4
-                className={`text-sm font-bold mt-1.5 transition ${
-                  isDark ? 'text-white group-hover:text-emerald-300' : 'text-slate-900 group-hover:text-emerald-700'
-                }`}
+          {REAL_SAMPLES.map(sample => {
+            const accent: Record<string, { badge: string; hover: string; cta: string }> = {
+              emerald: {
+                badge: isDark ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400' : 'bg-emerald-50 border-emerald-200 text-emerald-700',
+                hover: isDark ? 'hover:border-emerald-500/50 hover:bg-slate-800/80' : 'hover:border-emerald-400 hover:bg-emerald-50/50',
+                cta: isDark ? 'text-emerald-400' : 'text-emerald-600',
+              },
+              amber: {
+                badge: isDark ? 'bg-amber-500/10 border-amber-500/30 text-amber-400' : 'bg-amber-50 border-amber-200 text-amber-700',
+                hover: isDark ? 'hover:border-amber-500/50 hover:bg-slate-800/80' : 'hover:border-amber-400 hover:bg-amber-50/50',
+                cta: isDark ? 'text-amber-400' : 'text-amber-600',
+              },
+              rose: {
+                badge: isDark ? 'bg-rose-500/10 border-rose-500/30 text-rose-400' : 'bg-rose-50 border-rose-200 text-rose-700',
+                hover: isDark ? 'hover:border-rose-500/50 hover:bg-slate-800/80' : 'hover:border-rose-400 hover:bg-rose-50/50',
+                cta: isDark ? 'text-rose-400' : 'text-rose-600',
+              },
+              cyan: {
+                badge: isDark ? 'bg-cyan-500/10 border-cyan-500/30 text-cyan-400' : 'bg-cyan-50 border-cyan-200 text-cyan-700',
+                hover: isDark ? 'hover:border-cyan-500/50 hover:bg-slate-800/80' : 'hover:border-cyan-400 hover:bg-cyan-50/50',
+                cta: isDark ? 'text-cyan-400' : 'text-cyan-600',
+              },
+            };
+            const a = accent[sample.accent] ?? accent.cyan;
+            return (
+              <button
+                key={sample.id}
+                onClick={() => loadSample(sample)}
+                className={`p-3.5 rounded-xl border text-left transition group flex flex-col justify-between gap-2 cursor-pointer ${
+                  isDark ? 'bg-slate-950/60 border-slate-800' : 'bg-slate-50 border-slate-200'
+                } ${a.hover}`}
               >
-                OMP Hobby M4 (380mm)
-              </h4>
-              <p className={`text-xs mt-1 leading-relaxed ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
-                블레이드 밸런스가 잡힌 정상 헬리콥터. 낮은 자이로 노이즈와 안정된 호버링 스펙트럼.
-              </p>
-            </div>
-            <span className="text-xs font-semibold text-emerald-600 dark:text-emerald-400 flex items-center gap-1">
-              <span>샘플 불러오기</span> →
-            </span>
-          </button>
-
-          {/* Sample 2: Tail Vibe */}
-          <button
-            onClick={() => loadSample('tail_vibe')}
-            className={`p-3.5 rounded-xl border text-left transition group flex flex-col justify-between gap-2 cursor-pointer ${
-              isDark
-                ? 'bg-slate-950/60 hover:bg-slate-800/80 border-slate-800 hover:border-amber-500/50'
-                : 'bg-slate-50 hover:bg-amber-50/50 border-slate-200 hover:border-amber-400'
-            }`}
-          >
-            <div>
-              <div className="flex items-center justify-between">
-                <span className="px-2 py-0.5 rounded bg-amber-500/10 border border-amber-500/30 text-amber-600 dark:text-amber-400 text-[11px] font-bold">
-                  테일 진동 이슈 (162Hz)
+                <div>
+                  <div className="flex items-center justify-between">
+                    <span className={`px-2 py-0.5 rounded border text-[11px] font-bold ${a.badge}`}>
+                      {sample.tag}
+                    </span>
+                  </div>
+                  <h4
+                    className={`text-sm font-bold mt-1.5 transition ${
+                      isDark ? 'text-white' : 'text-slate-900'
+                    }`}
+                  >
+                    {sample.title}
+                  </h4>
+                  <p className={`text-[10px] mt-0.5 font-mono ${isDark ? 'text-slate-500' : 'text-slate-400'}`}>
+                    {sample.meta}
+                  </p>
+                  <p className={`text-xs mt-1 leading-relaxed ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
+                    {sample.description}
+                  </p>
+                </div>
+                <span className={`text-xs font-semibold flex items-center gap-1 ${a.cta}`}>
+                  <span>샘플 불러오기</span> →
                 </span>
-                <span className="text-[10px] text-slate-400 font-mono">2150 RPM</span>
-              </div>
-              <h4
-                className={`text-sm font-bold mt-1.5 transition ${
-                  isDark ? 'text-white group-hover:text-amber-300' : 'text-slate-900 group-hover:text-amber-700'
-                }`}
-              >
-                SAB Goblin 580 Raw
-              </h4>
-              <p className={`text-xs mt-1 leading-relaxed ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
-                테일 로터 블레이드 무게 차이로 인해 162Hz 요(Yaw) 축에 강한 고주파 진동 발생.
-              </p>
-            </div>
-            <span className="text-xs font-semibold text-amber-600 dark:text-amber-400 flex items-center gap-1">
-              <span>샘플 불러오기</span> →
-            </span>
-          </button>
-
-          {/* Sample 3: Main Vibe */}
-          <button
-            onClick={() => loadSample('main_vibe')}
-            className={`p-3.5 rounded-xl border text-left transition group flex flex-col justify-between gap-2 cursor-pointer ${
-              isDark
-                ? 'bg-slate-950/60 hover:bg-slate-800/80 border-slate-800 hover:border-rose-500/50'
-                : 'bg-slate-50 hover:bg-rose-50/50 border-slate-200 hover:border-rose-400'
-            }`}
-          >
-            <div>
-              <div className="flex items-center justify-between">
-                <span className="px-2 py-0.5 rounded bg-rose-500/10 border border-rose-500/30 text-rose-600 dark:text-rose-400 text-[11px] font-bold">
-                  메인 1P/2P 트래킹 진동
-                </span>
-                <span className="text-[10px] text-slate-400 font-mono">1890 RPM</span>
-              </div>
-              <h4
-                className={`text-sm font-bold mt-1.5 transition ${
-                  isDark ? 'text-white group-hover:text-rose-300' : 'text-slate-900 group-hover:text-rose-700'
-                }`}
-              >
-                Align T-Rex 700X FBL
-              </h4>
-              <p className={`text-xs mt-1 leading-relaxed ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
-                스핀들 샤프트 휨 및 블레이드 트래킹 불일치로 인한 31.5Hz 및 63Hz 롤/피치 진동.
-              </p>
-            </div>
-            <span className="text-xs font-semibold text-rose-600 dark:text-rose-400 flex items-center gap-1">
-              <span>샘플 불러오기</span> →
-            </span>
-          </button>
-
-          {/* Sample 4: Non-Rotorflight Rejection Test (Betaflight Quad) */}
-          <button
-            onClick={() => loadSample('betaflight_quad')}
-            className={`p-3.5 rounded-xl border text-left transition group flex flex-col justify-between gap-2 cursor-pointer ${
-              isDark
-                ? 'bg-rose-950/20 hover:bg-rose-900/30 border-rose-900/50 hover:border-rose-700'
-                : 'bg-rose-50 hover:bg-rose-100/70 border-rose-200 hover:border-rose-300'
-            }`}
-          >
-            <div>
-              <div className="flex items-center justify-between">
-                <span className="px-2 py-0.5 rounded bg-rose-500 text-white text-[10px] font-bold">
-                  거부 테스트용
-                </span>
-                <span className="text-[10px] text-rose-500 font-mono">드론 헤더</span>
-              </div>
-              <h4
-                className={`text-sm font-bold mt-1.5 transition ${
-                  isDark ? 'text-rose-300 group-hover:text-rose-200' : 'text-rose-800 group-hover:text-rose-900'
-                }`}
-              >
-                Betaflight 4.5 드론
-              </h4>
-              <p className={`text-xs mt-1 leading-relaxed ${isDark ? 'text-rose-200/80' : 'text-rose-700'}`}>
-                BBL 헤더에 Rotorflight 식별자가 없는 멀티로터 드론 파일. 비-Rotorflight 자동 감지 및 분석 차단 테스트.
-              </p>
-            </div>
-            <span className="text-xs font-semibold text-rose-500 flex items-center gap-1">
-              <span>거부 검증 실행</span> →
-            </span>
-          </button>
+              </button>
+            );
+          })}
         </div>
       </div>
 
