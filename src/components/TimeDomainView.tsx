@@ -2,17 +2,24 @@ import React, { useRef, useEffect, useState, useMemo } from 'react';
 import { BlackboxLog } from '../types/blackbox';
 import { useTheme } from '../context/ThemeContext';
 import { Gauge, Play, Pause, RotateCcw } from 'lucide-react';
+import type { SelectionRpm } from '../utils/rpmEstimator';
 
 interface TimeDomainViewProps {
   log: BlackboxLog;
   selectedWindow: { start: number; end: number };
   onWindowChange: (window: { start: number; end: number }) => void;
+  currentTimeSec: number;
+  onTimeChange: (time: number) => void;
+  selectionRpm?: SelectionRpm;
 }
 
 export const TimeDomainView: React.FC<TimeDomainViewProps> = ({
   log,
   selectedWindow,
   onWindowChange,
+  currentTimeSec,
+  onTimeChange,
+  selectionRpm,
 }) => {
   const { theme } = useTheme();
   const isDark = theme === 'dark';
@@ -20,6 +27,7 @@ export const TimeDomainView: React.FC<TimeDomainViewProps> = ({
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const isDraggingStart = useRef(false);
   const isDraggingEnd = useRef(false);
+  const isScrubbing = useRef(false);
 
   const [activeSignal, setActiveSignal] = useState<'gyro' | 'acc' | 'throttleRpm'>('gyro');
 
@@ -172,7 +180,18 @@ export const TimeDomainView: React.FC<TimeDomainViewProps> = ({
     ctx.fillStyle = '#06b6d4';
     ctx.fillRect(selStartX - 3, padTop, 6, 12);
     ctx.fillRect(selEndX - 3, padTop, 6, 12);
-  }, [downsampledData, selectedWindow, activeSignal, log.durationSec]);
+
+    // Current Time Playhead
+    if (currentTimeSec >= 0 && currentTimeSec <= dur) {
+      const playX = padLeft + (currentTimeSec / dur) * plotW;
+      ctx.strokeStyle = '#ef4444';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(playX, padTop);
+      ctx.lineTo(playX, padTop + plotH);
+      ctx.stroke();
+    }
+  }, [downsampledData, selectedWindow, currentTimeSec, activeSignal, log.durationSec]);
 
   // Pointer interactions for scrub & window dragging
   const handlePointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
@@ -192,11 +211,16 @@ export const TimeDomainView: React.FC<TimeDomainViewProps> = ({
       isDraggingStart.current = true;
     } else if (Math.abs(x - selEndX) < 14) {
       isDraggingEnd.current = true;
+    } else {
+      // Scrub time (1초 단위로 스냅)
+      isScrubbing.current = true;
+      const clickedTime = Math.max(0, Math.min(dur, Math.round(((x - padLeft) / plotW) * dur)));
+      onTimeChange(clickedTime);
     }
   };
 
   const handlePointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    if (!isDraggingStart.current && !isDraggingEnd.current) return;
+    if (!isDraggingStart.current && !isDraggingEnd.current && !isScrubbing.current) return;
 
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -206,7 +230,7 @@ export const TimeDomainView: React.FC<TimeDomainViewProps> = ({
     const padLeft = 40;
     const plotW = rect.width - padLeft - 16;
     const dur = log.durationSec || 1;
-    const targetT = Math.max(0, Math.min(dur, ((x - padLeft) / plotW) * dur));
+    const targetT = Math.max(0, Math.min(dur, Math.round(((x - padLeft) / plotW) * dur)));
 
     if (isDraggingStart.current) {
       onWindowChange({
@@ -218,12 +242,15 @@ export const TimeDomainView: React.FC<TimeDomainViewProps> = ({
         start: selectedWindow.start,
         end: Math.max(targetT, selectedWindow.start + 0.5),
       });
+    } else if (isScrubbing.current) {
+      onTimeChange(Math.round(targetT));
     }
   };
 
   const handlePointerUp = () => {
     isDraggingStart.current = false;
     isDraggingEnd.current = false;
+    isScrubbing.current = false;
   };
 
   return (
@@ -336,13 +363,27 @@ export const TimeDomainView: React.FC<TimeDomainViewProps> = ({
 
       {/* Selected Range Status Bar */}
       <div className={`flex flex-wrap items-center justify-between gap-2 text-xs pt-1 ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
-        <div className="flex items-center gap-2 font-mono">
+        <div className="flex flex-wrap items-center gap-2 font-mono">
           <span className={`font-semibold ${isDark ? 'text-cyan-400' : 'text-cyan-600'}`}>
             선택된 FFT 구간: {selectedWindow.start.toFixed(2)}s ~ {selectedWindow.end.toFixed(2)}s
           </span>
           <span className="text-slate-400">
             ({(selectedWindow.end - selectedWindow.start).toFixed(2)}초 지속)
           </span>
+          {selectionRpm && Number.isFinite(selectionRpm.rpm) && (
+            <span
+              className={`px-1.5 py-0.5 rounded border ${isDark ? 'bg-slate-900 border-slate-700 text-slate-200' : 'bg-white border-slate-200 text-slate-700'}`}
+              title={
+                selectionRpm.mode === 'point'
+                  ? '빨간 바 위치 ±0.5초 구간 평균 RPM'
+                  : '파란 바 범위 전체 평균 RPM'
+              }
+            >
+              평균 RPM: {Math.round(selectionRpm.rpm).toLocaleString()}
+              {log.rpmSource === 'stft_estimated' ? ' ✱추정' : ''}
+              <span className="text-slate-400"> ({selectionRpm.mode === 'point' ? '지점 ±0.5s' : '범위 전체'})</span>
+            </span>
+          )}
         </div>
 
         {/* Quick phase selectors — 빠른 구간 선택 */}

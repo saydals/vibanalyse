@@ -754,6 +754,7 @@ export function parseCsvOrTextLog(text: string, fileName: string): BlackboxLog[]
   const durationSec = time[time.length - 1] - time[0];
   const firmwareHeader = headers['Firmware revision'] || headers['firmware'] || headers['Firmware type'] || '';
   const validation = validateRotorflightLog(headerLines, firmwareHeader);
+  const hasRpmSensor = rpmIdx >= 0;
   return [{
     id: 1, filename: fileName,
     firmwareType: firmwareHeader || 'Unknown',
@@ -766,6 +767,7 @@ export function parseCsvOrTextLog(text: string, fileName: string): BlackboxLog[]
     gyro: { roll: Float32Array.from(roll), pitch: Float32Array.from(pitch), yaw: Float32Array.from(yaw) },
     acc: { x: Float32Array.from(accX), y: Float32Array.from(accY), z: Float32Array.from(accZ) },
     rpm: rpmA.length > 0 ? Float32Array.from(rpmA) : undefined,
+    rpmSource: hasRpmSensor ? 'sensor' : 'none',
     tailRpm: tailA.length > 0 ? Float32Array.from(tailA) : undefined,
     throttle: thrA.length > 0 ? Float32Array.from(thrA) : undefined,
     collective: collA.length > 0 ? Float32Array.from(collA) : undefined,
@@ -773,6 +775,13 @@ export function parseCsvOrTextLog(text: string, fileName: string): BlackboxLog[]
     current: curA.length > 0 ? Float32Array.from(curA) : undefined,
     events: [], rotorflightValidation: validation,
   }];
+}
+
+// CSV rows may pad missing trailing columns; gate on real sensor presence.
+export function hasRpmSensorData(log: Pick<import('../types/blackbox').BlackboxLog, 'rpm' | 'rpmSource'>): boolean {
+  if (log.rpmSource === 'sensor') return true;
+  if (log.rpmSource === 'stft_estimated') return false;
+  return !!log.rpm && log.rpm.length > 0;
 }
 
 /**
@@ -819,6 +828,7 @@ function buildBlackboxLog(parsed: ParsedLogData, fileName: string, id: number): 
   const firmwareHeader: string = headers['Firmware revision'] || headers['Firmware type'] || sysConfig.firmwareType || '';
   const fieldNames: string[] = frameDefs.I?.name ?? [];
   const validation = validateRotorflightLog(fieldNames, firmwareHeader);
+  const hasHeadspeedField = fieldNames.includes('headspeed');
   const flightEvents: FlightEvent[] = events.map(e => ({
     timeSec: (e.timeUs - t0) / 1000000,
     name: e.data ? `${e.name} (${e.data})` : e.name,
@@ -832,6 +842,7 @@ function buildBlackboxLog(parsed: ParsedLogData, fileName: string, id: number): 
     headers, fieldNames, time,
     gyro: { roll, pitch, yaw }, acc: { x: accX, y: accY, z: accZ },
     rpm: hasRpm ? rpm : undefined,
+    rpmSource: hasRpm || hasHeadspeedField ? 'sensor' : 'none',
     tailRpm: hasTail ? tailRpmArr : undefined,
     throttle: hasThr ? throttle : undefined,
     vbat: hasVbat ? vbat : undefined,

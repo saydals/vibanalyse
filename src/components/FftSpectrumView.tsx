@@ -1,5 +1,5 @@
 import React, { useRef, useEffect, useState, useMemo } from 'react';
-import { FftResult, HeliConfig } from '../types/blackbox';
+import { FftResult, HeliConfig, RpmSource } from '../types/blackbox';
 import { useTheme } from '../context/ThemeContext';
 import { Activity, Sliders, Sparkles, Check, ChevronDown, ShieldAlert } from 'lucide-react';
 
@@ -13,6 +13,9 @@ interface FftSpectrumViewProps {
   onMaxFreqRangeChange?: (range: 250 | 500) => void;
   /** 분석 불가 안내(예: 선택 구간 < 30초). null이면 정상 스펙트럼 표시 */
   analysisNotice?: string | null;
+  rpmSource?: RpmSource;
+  rpmEstimateMsg?: string | null;
+  rpmEstimating?: boolean;
 }
 
 interface DetectedPeak {
@@ -33,6 +36,9 @@ export const FftSpectrumView: React.FC<FftSpectrumViewProps> = ({
   maxFreqRange = 250,
   onMaxFreqRangeChange,
   analysisNotice,
+  rpmSource,
+  rpmEstimateMsg,
+  rpmEstimating,
 }) => {
   const { theme } = useTheme();
   const isDark = theme === 'dark';
@@ -820,7 +826,28 @@ export const FftSpectrumView: React.FC<FftSpectrumViewProps> = ({
             <span className={`text-[11px] font-medium whitespace-nowrap ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
               RPM
             </span>
+            {rpmSource === 'stft_estimated' && (
+              <span
+                title="RPM 센서 없음 – 자이로 추정값"
+                className={`px-1.5 py-0.5 rounded text-[10px] font-bold whitespace-nowrap ${
+                  isDark ? 'bg-amber-500/15 border border-amber-500/40 text-amber-300' : 'bg-amber-50 border border-amber-300 text-amber-700'
+                }`}
+              >
+                ✱추정
+              </span>
+            )}
           </div>
+          {rpmEstimateMsg && (
+            <div
+              className={`flex items-center gap-1.5 rounded-lg px-2 py-1 border text-[11px] font-medium ${
+                isDark ? 'bg-slate-950 border-slate-800 text-slate-300' : 'bg-slate-100 border-slate-200 text-slate-600'
+              }`}
+              title={rpmSource === 'stft_estimated' ? 'RPM 센서 없음 – 자이로 STFT 추정값' : undefined}
+            >
+              {rpmEstimating && <span className="inline-block w-3 h-3 rounded-full border-2 border-cyan-500 border-t-transparent animate-spin" />}
+              <span>{rpmEstimateMsg}</span>
+            </div>
+          )}
 
           {/* Max Frequency Range Selector */}
           <div
@@ -1063,8 +1090,8 @@ export const FftSpectrumView: React.FC<FftSpectrumViewProps> = ({
           <div className="flex flex-wrap items-center gap-2 font-mono text-[11px]">
             <span className={`px-2 py-0.5 rounded border ${
               isDark ? 'bg-sky-950/60 border-sky-800/40 text-sky-300' : 'bg-sky-50 border-sky-200 text-sky-700'
-            }`}>
-              1P Main: {main1P.toFixed(1)}Hz ({Math.round(headSpeedRpm)} RPM)
+            }`} title={rpmSource === 'stft_estimated' ? 'RPM 센서 없음 – 자이로 추정값' : undefined}>
+              1P Main: {main1P.toFixed(1)}Hz ({Math.round(headSpeedRpm)} RPM{rpmSource === 'stft_estimated' ? ' ✱' : ''})
             </span>
             <span className={`px-2 py-0.5 rounded border ${
               isDark ? 'bg-purple-950/60 border-purple-800/40 text-purple-300' : 'bg-purple-50 border-purple-200 text-purple-700'

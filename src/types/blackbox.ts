@@ -2,6 +2,8 @@
  * Rotorflight Blackbox Log Data Types
  */
 
+export type RpmSource = 'sensor' | 'stft_estimated' | 'none';
+
 export interface BlackboxLog {
   id: number;
   filename: string;
@@ -28,6 +30,8 @@ export interface BlackboxLog {
   };
   rpm?: Float32Array; // Main Rotor RPM
   tailRpm?: Float32Array; // Tail RPM
+  /** RPM 데이터 출처: sensor=센서(headspeed), stft_estimated=자이로 STFT 추정, none=없음 */
+  rpmSource: RpmSource;
   throttle?: Float32Array; // 0 - 100 %
   collective?: Float32Array; // % (-100 to +100 or 0 to 100)
   vbat?: Float32Array; // Volts

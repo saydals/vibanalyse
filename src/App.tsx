@@ -11,6 +11,7 @@ import { OfflineIndicator } from './components/OfflineIndicator';
 import { DEFAULT_SAMPLE, REAL_SAMPLES, fetchSampleLogs } from './utils/samples';
 import { computeMultiAxisFft } from './utils/fft';
 import { analyzeVibrations, MIN_ANALYSIS_SEC } from './utils/blackboxParser';
+import { estimateRpmForLogAsync, getRpmForSelection } from './utils/rpmEstimator';
 import { useTheme } from './context/ThemeContext';
 import { UploadCloud, ShieldAlert, Sparkles, Loader2 } from 'lucide-react';
 
@@ -37,6 +38,8 @@ export default function App() {
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [showUploaderModal, setShowUploaderModal] = useState<boolean>(false);
   const [maxFreqRange, setMaxFreqRange] = useState<250 | 500>(250);
+  const [rpmEstimating, setRpmEstimating] = useState<boolean>(false);
+  const [rpmEstimateMsg, setRpmEstimateMsg] = useState<string | null>(null);
 
   const currentLog = logs[currentLogIndex] || logs[0];
   const isRotorflight = currentLog?.rotorflightValidation?.isRotorflight ?? true;
@@ -59,11 +62,16 @@ export default function App() {
 
   useEffect(() => { loadRealSample(); }, [loadRealSample]);
 
-  // Selected FFT Window in seconds
-  const [selectedWindow, setSelectedWindow] = useState<{ start: number; end: number }>(() => ({
-    start: 0,
-    end: currentLog?.durationSec || 30,
-  }));
+  // Selected FFT Window in seconds (기본값: 호버링/비행중 구간)
+  const [selectedWindow, setSelectedWindow] = useState<{ start: number; end: number }>(() => {
+    const dur = currentLog?.durationSec || 30;
+    if (dur >= 60) return { start: 30, end: dur - 30 };
+    if (dur >= 30) return { start: 20, end: dur - 10 };
+    return { start: 0, end: dur };
+  });
+
+  // Current playhead time
+  const [currentTimeSec, setCurrentTimeSec] = useState<number>(0);
 
   // Helicopter mechanical config
   const [heliConfig, setHeliConfig] = useState<HeliConfig>({
@@ -76,11 +84,19 @@ export default function App() {
     bladeCount: 2,
   });
 
-  // When log changes, update window and detected RPM
+  // When log changes, update window and detected RPM.
+  // RPM 센서 없으면 Gyro STFT로 추정 RPM을 기존 rpm 배열과 동일 인터페이스로 주입.
   useEffect(() => {
     if (currentLog && isRotorflight) {
-      console.log('[useEffect] Setting selectedWindow:', { start: 0, end: currentLog.durationSec });
-      setSelectedWindow({ start: 0, end: currentLog.durationSec });
+      const dur = currentLog.durationSec;
+      if (dur >= 60) {
+        setSelectedWindow({ start: 30, end: dur - 30 });
+      } else if (dur >= 30) {
+        setSelectedWindow({ start: 20, end: dur - 10 });
+      } else {
+        setSelectedWindow({ start: 0, end: dur });
+      }
+      setCurrentTimeSec(0);
 
       // Check if log contains RPM
       if (currentLog.rpm && currentLog.rpm.length > 0) {
@@ -99,6 +115,52 @@ export default function App() {
       }
     }
   }, [currentLog, isRotorflight]);
+
+  // RPM 센서 없는 로그: 자이로 STFT 추정 (비동기 청크 처리, 메인스레드 블로킹 방지)
+  useEffect(() => {
+    if (!currentLog || !isRotorflight) return;
+    if (currentLog.rpmSource !== 'none') {
+      setRpmEstimateMsg(null);
+      return;
+    }
+    if (currentLog.totalFrames < 100 || currentLog.sampleRateHz <= 0) {
+      setRpmEstimateMsg('RPM 추정 불가 (데이터 부족)');
+      return;
+    }
+    let cancelled = false;
+    setRpmEstimating(true);
+    setRpmEstimateMsg('RPM 자이로 추정 중…');
+    estimateRpmForLogAsync(currentLog, () => {}).then(estimated => {
+      if (cancelled) return;
+      setRpmEstimating(false);
+      if (estimated.length === currentLog.totalFrames && estimated.length > 0) {
+        let sum = 0; let count = 0;
+        for (let i = 0; i < estimated.length; i++) {
+          const v = estimated[i];
+          if (Number.isFinite(v) && v > 800 && v < 6000) { sum += v; count++; }
+        }
+        if (count > 50) {
+          const avg = Math.round(sum / count);
+          setLogs(prev => prev.map(l =>
+            l === currentLog ? { ...l, rpm: estimated, rpmSource: 'stft_estimated' as const } : l,
+          ));
+          setHeliConfig(prev => ({ ...prev, mainRpm: avg }));
+          setRpmEstimateMsg(`RPM 추정 완료 (평균 ${avg.toLocaleString()} RPM ✱추정)`);
+        } else {
+          setRpmEstimateMsg('RPM 추정 실패 — 1P 피크를 찾지 못했습니다');
+        }
+      } else {
+        setRpmEstimateMsg('RPM 추정 실패 — 1P 피크를 찾지 못했습니다');
+      }
+    }).catch(e => {
+      if (cancelled) return;
+      console.error('[rpmEstimate] failed:', e);
+      setRpmEstimating(false);
+      setRpmEstimateMsg('RPM 추정 실패 — 1P 피크를 찾지 못했습니다');
+    });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentLog?.filename, currentLog?.totalFrames, isRotorflight]);
 
   const handleHeadSpeedRpmChange = (rpm: number) => {
     setHeliConfig(prev => ({ ...prev, mainRpm: rpm }));
@@ -169,6 +231,21 @@ export default function App() {
     setCurrentLogIndex(0);
     setShowUploaderModal(false);
   };
+
+  // 타임라인 바 RPM 조회 (파란 범위/빨간 지점 통합 — 센서/추정 공용)
+  const selectionRpm = useMemo(() => {
+    if (!currentLog) return { rpm: NaN, mode: 'range' as const, count: 0 };
+    return getRpmForSelection(currentLog, selectedWindow, currentTimeSec);
+  }, [currentLog, selectedWindow, currentTimeSec]);
+
+  // 선택 구간 평균 RPM이 바뀌면 헤드스피드 표시도 추종 (수동 입력은 유지 — 추정/센서 주입 시에만 반영)
+  useEffect(() => {
+    if (!currentLog?.rpm || currentLog.rpm.length === 0) return;
+    if (Number.isFinite(selectionRpm.rpm) && selectionRpm.count > 10) {
+      const avg = Math.round(selectionRpm.rpm);
+      setHeliConfig(prev => (Math.abs(prev.mainRpm - avg) >= 1 ? { ...prev, mainRpm: avg } : prev));
+    }
+  }, [selectionRpm.rpm, selectionRpm.count, currentLog]);
 
   return (
     <div
@@ -283,6 +360,9 @@ export default function App() {
                 onHeadSpeedRpmChange={handleHeadSpeedRpmChange}
                 maxFreqRange={maxFreqRange}
                 onMaxFreqRangeChange={setMaxFreqRange}
+                rpmSource={currentLog.rpmSource}
+                rpmEstimateMsg={rpmEstimateMsg}
+                rpmEstimating={rpmEstimating}
                 analysisNotice={
                   logTooShort
                     ? `비행 기록 ${currentLog.durationSec.toFixed(1)}초 — 최소 ${MIN_ANALYSIS_SEC}초가 못 되어 분석하지 않습니다.`
@@ -295,6 +375,9 @@ export default function App() {
                 log={currentLog}
                 selectedWindow={selectedWindow}
                 onWindowChange={setSelectedWindow}
+                currentTimeSec={currentTimeSec}
+                onTimeChange={setCurrentTimeSec}
+                selectionRpm={selectionRpm}
               />
 
               {/* Harmonics & Rotorflight Filter Tuner */}
