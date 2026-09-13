@@ -1200,12 +1200,15 @@ function parseSingleBinaryLog(bytes: Uint8Array, logStart: number, logEnd: numbe
 export function analyzeVibrations(
   log: BlackboxLog,
   config?: HeliConfig,
-  window?: { startSec: number; endSec: number }
+  window?: { start?: number; end?: number; startSec?: number; endSec?: number }
 ): VibrationSummary {
   // Optional analysis window: 0 → full log, or the selected FFT segment only
+  // Support both { start, end } (UI pattern) and { startSec, endSec } (legacy CLI pattern)
+  const winStart = window?.start ?? window?.startSec ?? 0;
+  const winEnd = window?.end ?? window?.endSec ?? log.durationSec;
   const n = log.totalFrames;
-  const n0 = window ? Math.max(0, Math.min(n - 1, Math.floor(window.startSec * log.sampleRateHz))) : 0;
-  const n1 = window ? Math.max(n0 + 1, Math.min(n, Math.ceil(window.endSec * log.sampleRateHz))) : n;
+  const n0 = Math.max(0, Math.min(n - 1, Math.floor(winStart * log.sampleRateHz)));
+  const n1 = Math.max(n0 + 1, Math.min(n, Math.ceil(winEnd * log.sampleRateHz)));
 
   // 1. Calculate RMS vibration
   const calcRms = (data: Float32Array | undefined): number => {

@@ -314,8 +314,10 @@ export function findVibrationPeaks(
       }
     }
 
-    // Adaptive threshold: supports very low vibrations (0.05°/s) up to high vibrations
-    const minFloor = name.startsWith('Acc') ? 0.02 : 0.08;
+    // Adaptive threshold: Welch 평균 스펙트럼(bin 진폭) 기준.
+    // computeWelchPsd magnitudes는 실제 사인파 진폭의 약 1/40 (1024-Hanning) 스케일이므로
+    // 절대 바닥값도 magnitude 단위에 맞게 낮춘다. (기존 0.08/0.02 → peaks=0 원인)
+    const minFloor = name.startsWith('Acc') ? 0.001 : 0.004;
     const threshold = Math.max(minFloor, channelMax * 0.25);
 
     // Detect peaks exceeding threshold
@@ -347,7 +349,10 @@ export function findVibrationPeaks(
 
     selected.forEach(pk => {
       const peakFreq = pk.freq;
-      const maxAmp = pk.amp;
+      // Welch magnitude(≈진폭/40, 1024-Hanning) → 대략의 사인파 peak 진폭(°/s, G)으로 환산.
+      // A ≈ magnitude × 2·sqrt(sum(w²)) ≈ magnitude × 39.2  (windowSize=1024, Hanning)
+      // 이 값은 analyzeVibrations 진단 임계값(8, 6 °/s)과 동일 단위로 맞춰진다.
+      const maxAmp = pk.amp * 39.2;
       let source = '미확인 고주파 진동 (Uncorrelated)';
 
       if (main1P > 0) {

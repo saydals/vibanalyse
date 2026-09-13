@@ -9,6 +9,8 @@ interface FftSpectrumViewProps {
   config?: HeliConfig;
   activeWindowSec?: { start: number; end: number };
   onHeadSpeedRpmChange?: (rpm: number) => void;
+  maxFreqRange?: 250 | 500;
+  onMaxFreqRangeChange?: (range: 250 | 500) => void;
   /** 분석 불가 안내(예: 선택 구간 < 30초). null이면 정상 스펙트럼 표시 */
   analysisNotice?: string | null;
 }
@@ -28,6 +30,8 @@ export const FftSpectrumView: React.FC<FftSpectrumViewProps> = ({
   config,
   activeWindowSec,
   onHeadSpeedRpmChange,
+  maxFreqRange = 250,
+  onMaxFreqRangeChange,
   analysisNotice,
 }) => {
   const { theme } = useTheme();
@@ -39,7 +43,9 @@ export const FftSpectrumView: React.FC<FftSpectrumViewProps> = ({
   const [localHeadSpeedRpm, setLocalHeadSpeedRpm] = useState<number>(headSpeedRpm);
 
   // View state
-  const [maxFreqRange, setMaxFreqRange] = useState<250 | 500>(500);
+  const [internalMaxFreqRange, setInternalMaxFreqRange] = useState<250 | 500>(maxFreqRange);
+  const activeMaxFreqRange = onMaxFreqRangeChange ? maxFreqRange : internalMaxFreqRange;
+  const setActiveMaxFreqRange = onMaxFreqRangeChange || setInternalMaxFreqRange;
   // X축 시작(스킵) 주파수: 0 ~ 50 Hz. 그래프의 X축 0점이 이 주파수로 설정된다.
   // (저주파 대역(< 25Hz)의 과도한 진동이 다른 주파수 표시를 압도하는 문제 해결)
   const [skipHz, setSkipHz] = useState<number>(25);
@@ -825,9 +831,9 @@ export const FftSpectrumView: React.FC<FftSpectrumViewProps> = ({
             {( [250, 500] as const).map(range => (
               <button
                 key={range}
-                onClick={() => setMaxFreqRange(range)}
+                onClick={() => setActiveMaxFreqRange(range)}
                 className={`px-2 py-1 rounded font-mono transition cursor-pointer ${
-                  maxFreqRange === range
+                  activeMaxFreqRange === range
                     ? isDark
                       ? 'bg-slate-800 text-white font-semibold'
                       : 'bg-white text-slate-900 font-semibold shadow-xs'

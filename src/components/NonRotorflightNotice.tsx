@@ -6,7 +6,7 @@ import { AlertOctagon, CheckCircle2, XCircle, FileWarning, ArrowLeft, RefreshCw,
 interface NonRotorflightNoticeProps {
   log: BlackboxLog;
   onOpenNewFile: () => void;
-  onLoadValidSample: () => void;
+  onLoadValidSample?: () => void;
 }
 
 export const NonRotorflightNotice: React.FC<NonRotorflightNoticeProps> = ({
@@ -287,13 +287,15 @@ export const NonRotorflightNotice: React.FC<NonRotorflightNoticeProps> = ({
 
         {/* Action Buttons */}
         <div className="mt-6 flex flex-wrap items-center gap-3">
-          <button
-            onClick={onLoadValidSample}
-            className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-semibold shadow-md shadow-cyan-600/20 transition cursor-pointer"
-          >
-            <RefreshCw className="w-4 h-4" />
-            정상 Rotorflight 샘플 불러오기 (OMP M4)
-          </button>
+          {onLoadValidSample && (
+            <button
+              onClick={onLoadValidSample}
+              className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-semibold shadow-md shadow-cyan-600/20 transition cursor-pointer"
+            >
+              <RefreshCw className="w-4 h-4" />
+              정상 Rotorflight 샘플 불러오기 (OMP M4)
+            </button>
+          )}
 
           <button
             onClick={onOpenNewFile}

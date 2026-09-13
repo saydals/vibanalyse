@@ -12,7 +12,7 @@ import { DEFAULT_SAMPLE, REAL_SAMPLES, fetchSampleLogs } from './utils/samples';
 import { computeMultiAxisFft } from './utils/fft';
 import { analyzeVibrations, MIN_ANALYSIS_SEC } from './utils/blackboxParser';
 import { useTheme } from './context/ThemeContext';
-import { Activity, Sliders, UploadCloud, ShieldAlert, Sparkles, Loader2 } from 'lucide-react';
+import { UploadCloud, ShieldAlert, Sparkles, Loader2 } from 'lucide-react';
 
 function emptyFftResult(): FftResult {
   return {
@@ -31,15 +31,12 @@ export default function App() {
   const { theme } = useTheme();
   const isDark = theme === 'dark';
 
-  // Start with no log; auto-load the bundled real Rotorflight sample (.bbl) on mount
   const [logs, setLogs] = useState<BlackboxLog[]>([]);
   const [sampleError, setSampleError] = useState<string | null>(null);
   const [currentLogIndex, setCurrentLogIndex] = useState<number>(0);
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [showUploaderModal, setShowUploaderModal] = useState<boolean>(false);
-
-  // Active view tab: 'dashboard' | 'tuning'
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'tuning'>('dashboard');
+  const [maxFreqRange, setMaxFreqRange] = useState<250 | 500>(250);
 
   const currentLog = logs[currentLogIndex] || logs[0];
   const isRotorflight = currentLog?.rotorflightValidation?.isRotorflight ?? true;
@@ -60,7 +57,6 @@ export default function App() {
     }
   }, []);
 
-  // Auto-load the bundled real sample log once
   useEffect(() => { loadRealSample(); }, [loadRealSample]);
 
   // Selected FFT Window in seconds
@@ -168,7 +164,7 @@ export default function App() {
     return result;
   }, [currentLog, heliConfig, isRotorflight, logTooShort, selectedWindow]);
 
-  const handleLogLoaded = (newLogs: BlackboxLog[]) => {
+  const handleLogLoaded = (newLogs: BlackboxLog[], fileName: string) => {
     setLogs(newLogs);
     setCurrentLogIndex(0);
     setShowUploaderModal(false);
@@ -212,7 +208,7 @@ export default function App() {
               </>
             ) : (
               <p className={`text-sm font-semibold ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>
-                실제 Rotorflight 블랙박스 샘플 로그({DEFAULT_SAMPLE.title})를 불러오는 중...
+                기본 샘플 로그를 불러오는 중...
               </p>
             )}
           </div>
@@ -226,107 +222,88 @@ export default function App() {
           </div>
         ) : (
           <>
-            {/* Navigation Tabs */}
-            <div
-              className={`flex flex-wrap items-center justify-between gap-3 pb-2 border-b ${
-                isDark ? 'border-slate-800/80' : 'border-slate-200'
-              }`}
-            >
+            {/* Log Info Bar */}
+            {currentLog && (
               <div
-                className={`flex items-center rounded-xl p-1 border text-xs font-semibold ${
-                  isDark ? 'bg-slate-900/90 border-slate-800' : 'bg-white border-slate-200 shadow-xs'
+                className={`flex flex-wrap items-center justify-between gap-2 text-xs border-b pb-2 ${
+                  isDark ? 'border-slate-800/80 text-slate-400' : 'border-slate-200 text-slate-500'
                 }`}
               >
-                <button
-                  id="tab-dashboard"
-                  onClick={() => setActiveTab('dashboard')}
-                  className={`flex items-center gap-1.5 px-3 py-2 rounded-lg transition cursor-pointer ${
-                    activeTab === 'dashboard'
-                      ? 'bg-cyan-600 text-white shadow-xs font-bold'
-                      : isDark
-                      ? 'text-slate-400 hover:text-white'
-                      : 'text-slate-600 hover:text-slate-900'
-                  }`}
-                >
-                  <Activity className="w-3.5 h-3.5" />
-                  <span>진동 종합 & FFT 스펙트럼</span>
-                </button>
+                <div className="flex flex-wrap items-center gap-2 overflow-hidden">
+                  <span className={isDark ? 'text-slate-500' : 'text-slate-400'}>기체:</span>
+                  <span className={`font-semibold truncate max-w-[160px] sm:max-w-none ${isDark ? 'text-white' : 'text-slate-900'}`}>
+                    {currentLog.craftName || 'Rotorflight Helicopter'}
+                  </span>
+                  <span className={isDark ? 'text-slate-600' : 'text-slate-300'}>|</span>
+                  <span className={`font-mono ${isDark ? 'text-cyan-300' : 'text-cyan-700 font-semibold'}`}>
+                    {currentLog.filename}
+                  </span>
+                </div>
 
-                <button
-                  id="tab-tuning"
-                  onClick={() => setActiveTab('tuning')}
-                  className={`flex items-center gap-1.5 px-3 py-2 rounded-lg transition cursor-pointer ${
-                    activeTab === 'tuning'
-                      ? 'bg-cyan-600 text-white shadow-xs font-bold'
-                      : isDark
-                      ? 'text-slate-400 hover:text-white'
-                      : 'text-slate-600 hover:text-slate-900'
-                  }`}
-                >
-                  <Sliders className="w-3.5 h-3.5" />
-                  <span>기어비 & 하모닉 튜너</span>
-                </button>
-               </div>
-             </div>
-
-            {/* Tab 1: Dashboard (Vibration Overview + FFT Spectrum + Timeline) */}
-            {activeTab === 'dashboard' && (
-              <div className="flex flex-col gap-5">
-                {/* Top Vibration Health & Metrics */}
-                <VibrationOverview
-                  summary={vibrationSummary}
-                  log={currentLog}
-                  onSelectPeak={freq => {
-                    // Focus on peak if needed
-                  }}
-                />
-
-                 {/* Interactive FFT Spectrum Chart */}
-                <FftSpectrumView
-                  fft={activeFft}
-                  headSpeedRpm={heliConfig.mainRpm}
-                  config={heliConfig}
-                  activeWindowSec={selectedWindow}
-                  onHeadSpeedRpmChange={handleHeadSpeedRpmChange}
-                  analysisNotice={
-                    logTooShort
-                      ? `비행 기록 ${currentLog.durationSec.toFixed(1)}초 — 최소 ${MIN_ANALYSIS_SEC}초가 못 되어 분석하지 않습니다.`
-                      : null
-                  }
-                />
-
-                {/* Time Domain Timeline & Window Selection */}
-                <TimeDomainView
-                  log={currentLog}
-                  selectedWindow={selectedWindow}
-                  onWindowChange={setSelectedWindow}
-                />
+                <div className="flex flex-wrap items-center gap-3 font-mono text-[11px]">
+                  <span className="flex items-center gap-1">
+                    <span className={isDark ? 'text-slate-500' : 'text-slate-400'}>시간:</span>
+                    <span className={isDark ? 'text-white' : 'text-slate-800 font-semibold'}>
+                      {currentLog.durationSec.toFixed(1)}초
+                    </span>
+                  </span>
+                  <span className="flex items-center gap-1">
+                    <span className={isDark ? 'text-slate-500' : 'text-slate-400'}>샘플:</span>
+                    <span className={isDark ? 'text-white' : 'text-slate-800 font-semibold'}>
+                      {currentLog.sampleRateHz} Hz
+                    </span>
+                  </span>
+                  <span className="flex items-center gap-1 hidden md:inline-flex">
+                    <span className={isDark ? 'text-slate-500' : 'text-slate-400'}>프레임:</span>
+                    <span className={isDark ? 'text-white' : 'text-slate-800 font-semibold'}>
+                      {currentLog.totalFrames.toLocaleString()}
+                    </span>
+                  </span>
+                </div>
               </div>
             )}
 
-            {/* Tab 2: Harmonics & Rotorflight Filter Tuner */}
-            {activeTab === 'tuning' && (
-              <div className="flex flex-col gap-5">
-                <HarmonicsTuningAdvisor
-                  config={heliConfig}
-                  onConfigChange={setHeliConfig}
-                  detectedRpm={vibrationSummary.detectedHeadSpeedRpm}
-                />
+            {/* Main Content */}
+            <div className="flex flex-col gap-5">
+              {/* Top Vibration Health & Metrics */}
+              <VibrationOverview
+                summary={vibrationSummary}
+                log={currentLog}
+                onSelectPeak={freq => {
+                  // Focus on peak if needed
+                }}
+              />
 
-                <FftSpectrumView
-                  fft={activeFft}
-                  headSpeedRpm={heliConfig.mainRpm}
-                  config={heliConfig}
-                  activeWindowSec={selectedWindow}
-                  onHeadSpeedRpmChange={handleHeadSpeedRpmChange}
-                  analysisNotice={
-                    logTooShort
-                      ? `비행 기록 ${currentLog.durationSec.toFixed(1)}초 — 최소 ${MIN_ANALYSIS_SEC}초가 못 되어 분석하지 않습니다.`
-                      : null
-                  }
-                />
-              </div>
-            )}
+               {/* Interactive FFT Spectrum Chart */}
+              <FftSpectrumView
+                fft={activeFft}
+                headSpeedRpm={heliConfig.mainRpm}
+                config={heliConfig}
+                activeWindowSec={selectedWindow}
+                onHeadSpeedRpmChange={handleHeadSpeedRpmChange}
+                maxFreqRange={maxFreqRange}
+                onMaxFreqRangeChange={setMaxFreqRange}
+                analysisNotice={
+                  logTooShort
+                    ? `비행 기록 ${currentLog.durationSec.toFixed(1)}초 — 최소 ${MIN_ANALYSIS_SEC}초가 못 되어 분석하지 않습니다.`
+                    : null
+                }
+              />
+
+              {/* Time Domain Timeline & Window Selection */}
+              <TimeDomainView
+                log={currentLog}
+                selectedWindow={selectedWindow}
+                onWindowChange={setSelectedWindow}
+              />
+
+              {/* Harmonics & Rotorflight Filter Tuner */}
+              <HarmonicsTuningAdvisor
+                config={heliConfig}
+                onConfigChange={setHeliConfig}
+                detectedRpm={vibrationSummary.detectedHeadSpeedRpm}
+              />
+            </div>
           </>
         )}
       </main>

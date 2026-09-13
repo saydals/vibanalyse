@@ -183,7 +183,7 @@ export const FileUploader: React.FC<FileUploaderProps> = ({
           <div className="flex items-center gap-2">
             <Sparkles className="w-4 h-4 text-amber-500" />
             <h3 className={`text-sm font-semibold ${isDark ? 'text-white' : 'text-slate-900'}`}>
-              준비된 샘플 로그로 즉시 테스트 (클릭 시 진동 분석 시작)
+              샘플 로그 불러오기
             </h3>
           </div>
         </div>
@@ -208,7 +208,7 @@ export const FileUploader: React.FC<FileUploaderProps> = ({
               },
               cyan: {
                 badge: isDark ? 'bg-cyan-500/10 border-cyan-500/30 text-cyan-400' : 'bg-cyan-50 border-cyan-200 text-cyan-700',
-                hover: isDark ? 'hover:border-cyan-500/50 hover:bg-slate-800/80' : 'hover:border-cyan-400 hover:bg-cyan-50/50',
+                hover: isDark ? 'hover:border-cyan-500/50 hover:bg-cyan-50/50' : 'hover:border-cyan-400 hover:bg-cyan-50/50',
                 cta: isDark ? 'text-cyan-400' : 'text-cyan-600',
               },
             };
