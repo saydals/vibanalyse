@@ -7,16 +7,12 @@ interface TimeDomainViewProps {
   log: BlackboxLog;
   selectedWindow: { start: number; end: number };
   onWindowChange: (window: { start: number; end: number }) => void;
-  currentTimeSec: number;
-  onTimeChange: (time: number) => void;
 }
 
 export const TimeDomainView: React.FC<TimeDomainViewProps> = ({
   log,
   selectedWindow,
   onWindowChange,
-  currentTimeSec,
-  onTimeChange,
 }) => {
   const { theme } = useTheme();
   const isDark = theme === 'dark';
@@ -24,7 +20,6 @@ export const TimeDomainView: React.FC<TimeDomainViewProps> = ({
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const isDraggingStart = useRef(false);
   const isDraggingEnd = useRef(false);
-  const isScrubbing = useRef(false);
 
   const [activeSignal, setActiveSignal] = useState<'gyro' | 'acc' | 'throttleRpm'>('gyro');
 
@@ -177,18 +172,7 @@ export const TimeDomainView: React.FC<TimeDomainViewProps> = ({
     ctx.fillStyle = '#06b6d4';
     ctx.fillRect(selStartX - 3, padTop, 6, 12);
     ctx.fillRect(selEndX - 3, padTop, 6, 12);
-
-    // Current Time Playhead
-    if (currentTimeSec >= 0 && currentTimeSec <= dur) {
-      const playX = padLeft + (currentTimeSec / dur) * plotW;
-      ctx.strokeStyle = '#ef4444';
-      ctx.lineWidth = 1.5;
-      ctx.beginPath();
-      ctx.moveTo(playX, padTop);
-      ctx.lineTo(playX, padTop + plotH);
-      ctx.stroke();
-    }
-  }, [downsampledData, selectedWindow, currentTimeSec, activeSignal, log.durationSec]);
+  }, [downsampledData, selectedWindow, activeSignal, log.durationSec]);
 
   // Pointer interactions for scrub & window dragging
   const handlePointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
@@ -208,16 +192,11 @@ export const TimeDomainView: React.FC<TimeDomainViewProps> = ({
       isDraggingStart.current = true;
     } else if (Math.abs(x - selEndX) < 14) {
       isDraggingEnd.current = true;
-    } else {
-      // Scrub time
-      isScrubbing.current = true;
-      const clickedTime = Math.max(0, Math.min(dur, ((x - padLeft) / plotW) * dur));
-      onTimeChange(clickedTime);
     }
   };
 
   const handlePointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    if (!isDraggingStart.current && !isDraggingEnd.current && !isScrubbing.current) return;
+    if (!isDraggingStart.current && !isDraggingEnd.current) return;
 
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -239,15 +218,12 @@ export const TimeDomainView: React.FC<TimeDomainViewProps> = ({
         start: selectedWindow.start,
         end: Math.max(targetT, selectedWindow.start + 0.5),
       });
-    } else if (isScrubbing.current) {
-      onTimeChange(targetT);
     }
   };
 
   const handlePointerUp = () => {
     isDraggingStart.current = false;
     isDraggingEnd.current = false;
-    isScrubbing.current = false;
   };
 
   return (

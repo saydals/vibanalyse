@@ -111,7 +111,7 @@ export const Header: React.FC<HeaderProps> = ({
               }`}
             >
               <Upload className="w-3.5 h-3.5 text-cyan-500" />
-              <span className="hidden sm:inline">다른 BBL 열기</span>
+              <span className="hidden sm:inline">BBL 열기</span>
               <span className="sm:hidden">파일</span>
             </button>
           )}

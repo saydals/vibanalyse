@@ -69,9 +69,6 @@ export default function App() {
     end: currentLog?.durationSec || 30,
   }));
 
-  // Current playhead time
-  const [currentTimeSec, setCurrentTimeSec] = useState<number>(3.5);
-
   // Helicopter mechanical config
   const [heliConfig, setHeliConfig] = useState<HeliConfig>({
     mainRpm: 2300,
@@ -88,7 +85,6 @@ export default function App() {
     if (currentLog && isRotorflight) {
       console.log('[useEffect] Setting selectedWindow:', { start: 0, end: currentLog.durationSec });
       setSelectedWindow({ start: 0, end: currentLog.durationSec });
-      setCurrentTimeSec(Math.min(currentLog.durationSec, 3.5));
 
       // Check if log contains RPM
       if (currentLog.rpm && currentLog.rpm.length > 0) {
@@ -107,6 +103,10 @@ export default function App() {
       }
     }
   }, [currentLog, isRotorflight]);
+
+  const handleHeadSpeedRpmChange = (rpm: number) => {
+    setHeliConfig(prev => ({ ...prev, mainRpm: rpm }));
+  };
 
   // 로그 전체 길이가 MIN_ANALYSIS_SEC 미만이면 진동 분석을 하지 않는다.
   // (빠른 구간 선택/수동 선택과 무관하게 30초 미만 로그는 분석 대상이 아니다.)
@@ -266,23 +266,8 @@ export default function App() {
                   <Sliders className="w-3.5 h-3.5" />
                   <span>기어비 & 하모닉 튜너</span>
                 </button>
-              </div>
-
-              {/* Quick file action button */}
-              <div className="flex items-center gap-2 text-xs">
-                <button
-                  onClick={() => setShowUploaderModal(true)}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border transition cursor-pointer ${
-                    isDark
-                      ? 'bg-slate-900 hover:bg-slate-800 border-slate-800 text-slate-300 hover:text-white'
-                      : 'bg-white hover:bg-slate-50 border-slate-300 text-slate-700 hover:text-slate-900 shadow-xs'
-                  }`}
-                >
-                  <UploadCloud className="w-3.5 h-3.5 text-cyan-500" />
-                  <span>내 BBL 파일 업로드</span>
-                </button>
-              </div>
-            </div>
+               </div>
+             </div>
 
             {/* Tab 1: Dashboard (Vibration Overview + FFT Spectrum + Timeline) */}
             {activeTab === 'dashboard' && (
@@ -296,12 +281,13 @@ export default function App() {
                   }}
                 />
 
-                {/* Interactive FFT Spectrum Chart */}
+                 {/* Interactive FFT Spectrum Chart */}
                 <FftSpectrumView
                   fft={activeFft}
                   headSpeedRpm={heliConfig.mainRpm}
                   config={heliConfig}
                   activeWindowSec={selectedWindow}
+                  onHeadSpeedRpmChange={handleHeadSpeedRpmChange}
                   analysisNotice={
                     logTooShort
                       ? `비행 기록 ${currentLog.durationSec.toFixed(1)}초 — 최소 ${MIN_ANALYSIS_SEC}초가 못 되어 분석하지 않습니다.`
@@ -314,8 +300,6 @@ export default function App() {
                   log={currentLog}
                   selectedWindow={selectedWindow}
                   onWindowChange={setSelectedWindow}
-                  currentTimeSec={currentTimeSec}
-                  onTimeChange={setCurrentTimeSec}
                 />
               </div>
             )}
@@ -334,6 +318,7 @@ export default function App() {
                   headSpeedRpm={heliConfig.mainRpm}
                   config={heliConfig}
                   activeWindowSec={selectedWindow}
+                  onHeadSpeedRpmChange={handleHeadSpeedRpmChange}
                   analysisNotice={
                     logTooShort
                       ? `비행 기록 ${currentLog.durationSec.toFixed(1)}초 — 최소 ${MIN_ANALYSIS_SEC}초가 못 되어 분석하지 않습니다.`

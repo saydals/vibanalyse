@@ -8,6 +8,7 @@ interface FftSpectrumViewProps {
   headSpeedRpm: number;
   config?: HeliConfig;
   activeWindowSec?: { start: number; end: number };
+  onHeadSpeedRpmChange?: (rpm: number) => void;
   /** 분석 불가 안내(예: 선택 구간 < 30초). null이면 정상 스펙트럼 표시 */
   analysisNotice?: string | null;
 }
@@ -26,6 +27,7 @@ export const FftSpectrumView: React.FC<FftSpectrumViewProps> = ({
   headSpeedRpm,
   config,
   activeWindowSec,
+  onHeadSpeedRpmChange,
   analysisNotice,
 }) => {
   const { theme } = useTheme();
@@ -34,8 +36,10 @@ export const FftSpectrumView: React.FC<FftSpectrumViewProps> = ({
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
 
+  const [localHeadSpeedRpm, setLocalHeadSpeedRpm] = useState<number>(headSpeedRpm);
+
   // View state
-  const [maxFreqRange, setMaxFreqRange] = useState<250 | 500 | 1000>(500);
+  const [maxFreqRange, setMaxFreqRange] = useState<250 | 500>(500);
   // X축 시작(스킵) 주파수: 0 ~ 50 Hz. 그래프의 X축 0점이 이 주파수로 설정된다.
   // (저주파 대역(< 25Hz)의 과도한 진동이 다른 주파수 표시를 압도하는 문제 해결)
   const [skipHz, setSkipHz] = useState<number>(25);
@@ -78,6 +82,10 @@ export const FftSpectrumView: React.FC<FftSpectrumViewProps> = ({
       setSimNotchFreq(Math.round(tail1P));
     }
   }, [tail1P]);
+
+  useEffect(() => {
+    setLocalHeadSpeedRpm(headSpeedRpm);
+  }, [headSpeedRpm]);
 
   // Max observed amplitude in the visible frequency range (skipHz ~ maxFreqRange)
   const maxObservedAmp = useMemo(() => {
@@ -776,13 +784,45 @@ export const FftSpectrumView: React.FC<FftSpectrumViewProps> = ({
             RPM 하모닉
           </button>
 
+          {/* Head Speed RPM Input */}
+          <div
+            className={`flex items-center gap-1.5 rounded-lg px-2 py-1 border text-xs ${
+              isDark ? 'bg-slate-950 border-slate-800' : 'bg-slate-100 border-slate-200'
+            }`}
+            title="헤드스피드 RPM을 입력하면 하모닉 마커 주파수가 함께 변경됩니다"
+          >
+            <span className={`text-[11px] font-medium whitespace-nowrap ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>
+              헤드스피드
+            </span>
+            <input
+              type="number"
+              value={localHeadSpeedRpm}
+              onChange={e => {
+                const val = Math.max(0, Math.min(10000, Number(e.target.value) || 0));
+                setLocalHeadSpeedRpm(val);
+                onHeadSpeedRpmChange?.(val);
+              }}
+              className={`w-20 rounded px-1.5 py-0.5 font-mono text-xs outline-none cursor-pointer ${
+                isDark
+                  ? 'bg-slate-800 text-white border border-slate-700'
+                  : 'bg-white text-slate-900 border border-slate-300'
+              }`}
+              min="0"
+              max="10000"
+              step="50"
+            />
+            <span className={`text-[11px] font-medium whitespace-nowrap ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
+              RPM
+            </span>
+          </div>
+
           {/* Max Frequency Range Selector */}
           <div
             className={`flex items-center rounded-lg p-0.5 border text-xs ${
               isDark ? 'bg-slate-950 border-slate-800' : 'bg-slate-100 border-slate-200'
             }`}
           >
-            {( [250, 500, 1000] as const).map(range => (
+            {( [250, 500] as const).map(range => (
               <button
                 key={range}
                 onClick={() => setMaxFreqRange(range)}
