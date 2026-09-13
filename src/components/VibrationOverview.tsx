@@ -258,7 +258,7 @@ export const VibrationOverview: React.FC<VibrationOverviewProps> = ({
                   : 'bg-slate-50 border-slate-200 text-slate-700'
               }`}
             >
-              <div className="space-y-1">
+              <div className="space-y-1 min-w-0">
                 <div className={`font-semibold text-sm flex items-center gap-1.5 ${isDark ? 'text-white' : 'text-slate-900'}`}>
                   {diag.type === 'warning' && <AlertTriangle className="w-4 h-4 text-amber-500 flex-shrink-0" />}
                   {diag.type === 'error' && <AlertCircle className="w-4 h-4 text-rose-500 flex-shrink-0" />}
@@ -270,7 +270,7 @@ export const VibrationOverview: React.FC<VibrationOverviewProps> = ({
               </div>
 
               {diag.action && (
-                <div className={`flex-shrink-0 px-3 py-1.5 rounded-lg border font-medium text-xs ${
+                <div className={`w-full sm:w-auto px-3 py-1.5 rounded-lg border font-medium text-xs ${
                   isDark ? 'bg-slate-900/80 border-inherit text-cyan-300' : 'bg-white border-inherit text-cyan-700 shadow-xs'
                 }`}>
                   👉 권장 조치: {diag.action}
