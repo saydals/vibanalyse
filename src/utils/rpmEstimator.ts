@@ -10,6 +10,16 @@ export const STFT_STEP_SEC = 0.1;
 export const STFT_FREQ_MIN_HZ = 20;
 export const STFT_FREQ_MAX_HZ = 80;
 export const STFT_SNR_THRESHOLD = 3;
+/** 2P(블레이드 통과) 고조파 검증 허용 오차 (Hz) */
+export const STFT_HARMONIC_TOL_HZ = 3;
+/** 2P 고조파가 1P 후보 대비 최소 몇 배여야 1P로 인정하는지 */
+export const STFT_HARMONIC_MIN_RATIO = 0.15;
+/**
+ * 탐색 주파수 범위 근거:
+ * - 외부 제안(RPM 800~4200 → 13.3~70Hz)은 79.5Hz를 범위 탈락시키지만,
+ *   정상 고RPM 기체(1P 70~80Hz = 4200~4800RPM)까지 잘라내므로 미채택.
+ * - 20~80Hz 유지 + 하모닉 곱 스코어로 79.5Hz 오검출을 원천 탈락시킨다.
+ */
 
 export interface RpmTimeSeries {
   timeMs: number[];
@@ -98,8 +108,213 @@ export function smoothRpm(rpm: number[], medianWindow = 5, avgWindow = 3): numbe
 }
 
 /**
+ * 단일 스펙트럼(power, 0..Nyquist)에서 RPM 선택.
+ * 규칙: 20~80Hz 내 로컬 피크들 중 하모닉 곱 스코어(p1 × p2)가 최대인 후보를 1P로 선택.
+ * (외부 제안 검증 2의 핵심을 채택: 47.3Hz는 p(47.3)×p(94.7)が高く 채택,
+ *  79.5Hz는 p(79.5)×p(159)에 피크가 없어 탈락한다.)
+ * 반환: { rpm, peakHz, peakPower, harmonicPower } — 유효 후보 없으면 rpm=NaN
+ */
+export interface SpectrumPick {
+  rpm: number; peakHz: number; peakPower: number; harmonicPower: number;
+  multScore: number; addScore: number;
+}
+
+/**
+ * 단일 스펙트럼 후보 스코어링 (외부 제안 검증 2 핵심 + 기존 가드).
+ * - powerAtHz: 특정 주파수 ±2빈 최대값 조회
+ * - score = p1 x p2 (하모닉 곱), SNR 게이트 + 2P오인 스킵 포함
+ */
+export function scoreSpectrumPeaks(
+  powers: Float32Array,
+  sampleRate: number,
+  fftSize: number,
+  freqMin = STFT_FREQ_MIN_HZ,
+  freqMax = STFT_FREQ_MAX_HZ,
+  snrThreshold = STFT_SNR_THRESHOLD,
+): Map<number, SpectrumPick> {
+  const nyquist = sampleRate / 2;
+  const kMin = Math.max(1, Math.floor((freqMin * fftSize) / sampleRate));
+  const kMax = Math.min(Math.floor(powers.length) - 1, Math.ceil((freqMax * fftSize) / sampleRate));
+  const binHz = sampleRate / fftSize;
+  if (kMax <= kMin || !(binHz > 0)) return new Map<number, SpectrumPick>();
+  // 범위 평균 파워 (SNR 게이트용)
+  let sum = 0;
+  for (let k = kMin; k <= kMax; k++) sum += powers[k];
+  const meanPower = sum / Math.max(1, kMax - kMin + 1);
+  if (!(meanPower > 0)) return new Map<number, SpectrumPick>();
+  // 특정 주파수 파워 조회: ±2빈(외부 제안 powerAtHz) + 허용오차 병합
+  const tolBins = Math.max(2, Math.round(STFT_HARMONIC_TOL_HZ / binHz));
+  const powerAtHz = (freqHz: number): number => {
+    const kc = Math.round((freqHz * fftSize) / sampleRate);
+    let mx = 0;
+    for (let j = kc - tolBins; j <= kc + tolBins; j++) {
+      if (j >= 0 && j < powers.length && powers[j] > mx) mx = powers[j];
+    }
+    return mx;
+  };
+  const hPowerOf = (f1: number): number => {
+    const f2 = f1 * 2;
+    return f2 < nyquist ? powerAtHz(f2) : 0;
+  };
+  const picks = new Map<number, SpectrumPick>();
+  const scorePeak = (k: number, p: number): void => {
+    let refinedK = k;
+    const a = powers[k - 1]; const b = powers[k]; const c = powers[k + 1];
+    const d = a - 2 * b + c;
+    if (Math.abs(d) > 1e-12) {
+      const delta = (0.5 * (a - c)) / d;
+      if (Math.abs(delta) <= 1) refinedK = k + delta;
+    }
+    const f1 = (refinedK * sampleRate) / fftSize;
+    if (!(f1 >= freqMin && f1 <= freqMax)) return;
+    const hPower = hPowerOf(f1);
+    const multScore = p * hPower;
+    const hFloor = meanPower * STFT_HARMONIC_MIN_RATIO;
+    const addScore = p + Math.max(0, hPower - hFloor) * 0.5;
+    picks.set(k, { rpm: f1 * 60, peakHz: f1, peakPower: p, harmonicPower: hPower, multScore, addScore });
+  };
+  for (let k = kMin + 1; k <= kMax - 1; k++) {
+    const p = powers[k];
+    if (!(p > powers[k - 1]) || !(p >= powers[k + 1])) continue;
+    // SNR 게이트: 강한 피크는 그대로 통과.
+    // 약한 피크라도 2배 위치에 평균 이상의 에너지가 있으면 1P 후보로 인정
+    // (스크린샷: 1P 47Hz가 평균의 1.75배로 약해도 2P 94.6Hz 받침으로 살림.
+    //  SNR 3배를 그대로 요구하면 진짜 1P가 탈락하고 NaN이 되므로 완화한다.)
+    if (!(p >= meanPower * snrThreshold)) {
+      // 절대 하한: 노이즈 플로어 차단 (평균 x 0.5 미만은 무조건 탈락)
+      if (!(p >= meanPower * 0.5)) continue;
+      const f = (k * sampleRate) / fftSize;
+      const fDouble = f * 2;
+      if (fDouble >= freqMin && fDouble <= nyquist) {
+        // 2배 위치 판정은 절대값이 아니라 로컬 피크 존재 여부로 판단한다.
+        // (79.5Hz 공진이 평균을 부풀리면 진짜 2P 94.6Hz가 평균 이하로 보여 탈락하므로)
+        const kd = Math.round((fDouble * fftSize) / sampleRate);
+        let dblPeak = false;
+        for (let j = kd - tolBins; j <= kd + tolBins; j++) {
+          if (j > kMin && j < powers.length - 1 && powers[j] > powers[j - 1] && powers[j] >= powers[j + 1]) {
+            if (powers[j] >= meanPower * 0.3) { dblPeak = true; break; }
+          }
+        }
+        if (!dblPeak) continue;
+      } else continue;
+    }
+    // 강한 피크 f의 f/2 위치에 평균 이상 에너지가 있으면 f는 2P로 간주하고 스킵.
+    // 진짜 1P(f/2)는 자체 피크(또는 완화 게이트)로 평가됨.
+    const f = (k * sampleRate) / fftSize;
+    const fSub = f / 2;
+    if (fSub >= freqMin) {
+      // fSub 조회는 ±1빈으로 좁게: 강한 피크의 사이드로브가 이웃 후보를
+      // 2P로 오인 스킵하는 것 방지 (47.3Hz가 79.5Hz 사이드로브에 묻히지 않게)
+      const kcSub = Math.round((fSub * fftSize) / sampleRate);
+      let subMax = 0;
+      for (let j = kcSub - 1; j <= kcSub + 1; j++) {
+        if (j >= 0 && j < powers.length && powers[j] > subMax) subMax = powers[j];
+      }
+      if (subMax >= meanPower * 1.5) {
+        const f2 = f * 2;
+        const hMax = f2 < nyquist ? powerAtHz(f2) : 0;
+        // f/2가 로컬 피크(양옆보다 큼)일 때만 f를 2P로 스킵. 완만한 언덕은 스킵 금지.
+        const kcS = kcSub;
+        const isSubPeak = kcS > 0 && kcS < powers.length - 1 &&
+          powers[kcS] >= powers[kcS - 1] && powers[kcS] > powers[kcS + 1];
+        if (isSubPeak && (f2 > nyquist * 0.9 || hMax < p * 0.1)) continue;
+      }
+    }
+    scorePeak(k, p);
+  }
+  return picks;
+}
+
+/** 단일 스펙트럼에서 RPM 선택 (하모닉 곱 스코어 최대 후보). */
+export function pickRpmFromSpectrum(
+  powers: Float32Array,
+  sampleRate: number,
+  fftSize: number,
+  freqMin = STFT_FREQ_MIN_HZ,
+  freqMax = STFT_FREQ_MAX_HZ,
+  snrThreshold = STFT_SNR_THRESHOLD,
+): { rpm: number; peakHz: number; peakPower: number; harmonicPower: number } {
+  const empty = { rpm: NaN, peakHz: NaN, peakPower: 0, harmonicPower: 0 };
+  const picks = scoreSpectrumPeaks(powers, sampleRate, fftSize, freqMin, freqMax, snrThreshold);
+  let bestScore = -1;
+  let bestAdd = -1;
+  let best = empty;
+  for (const pk of picks.values()) {
+    if (bestScore < 0 || pk.multScore > bestScore * 1.01) {
+      bestScore = pk.multScore;
+      bestAdd = pk.addScore;
+      best = { rpm: pk.rpm, peakHz: pk.peakHz, peakPower: pk.peakPower, harmonicPower: pk.harmonicPower };
+    } else if (bestScore > 0 && Math.abs(pk.multScore - bestScore) <= bestScore * 0.01 && pk.addScore > bestAdd) {
+      bestAdd = pk.addScore;
+      best = { rpm: pk.rpm, peakHz: pk.peakHz, peakPower: pk.peakPower, harmonicPower: pk.harmonicPower };
+    }
+  }
+  return best;
+}
+
+/**
+ * Roll+Pitch 교차 하모닉 스코어 (외부 제안 검증 3).
+ * combinedScore(f) = rollMult(f) + pitchMult(f). 한 축에만 강한 구조 공진은 탈락.
+ * 양쪽 모두 후보가 없으면 NaN, 한쪽만 있으면 단축 폴백.
+ */
+export function pickRpmCombined(
+  rollPowers: Float32Array,
+  pitchPowers: Float32Array,
+  sampleRate: number,
+  fftSize: number,
+  freqMin = STFT_FREQ_MIN_HZ,
+  freqMax = STFT_FREQ_MAX_HZ,
+  snrThreshold = STFT_SNR_THRESHOLD,
+): { rpm: number; peakHz: number; peakPower: number; harmonicPower: number } {
+  const empty = { rpm: NaN, peakHz: NaN, peakPower: 0, harmonicPower: 0 };
+  const rPicks = scoreSpectrumPeaks(rollPowers, sampleRate, fftSize, freqMin, freqMax, snrThreshold);
+  const pPicks = scoreSpectrumPeaks(pitchPowers, sampleRate, fftSize, freqMin, freqMax, snrThreshold);
+  const findNear = (m: Map<number, SpectrumPick>, k: number): SpectrumPick | undefined => {
+    if (m.has(k)) return m.get(k);
+    if (m.has(k - 1)) return m.get(k - 1);
+    if (m.has(k + 1)) return m.get(k + 1);
+    return undefined;
+  };
+  const keys = new Set<number>([...rPicks.keys(), ...pPicks.keys()]);
+  let bestScore = -1;
+  let bestAdd = -1;
+  let best = empty;
+  for (const k of keys) {
+    const r = findNear(rPicks, k);
+    const p = findNear(pPicks, k);
+    if (!r || !p) continue;
+    const mult = r.multScore + p.multScore;
+    const add = r.addScore + p.addScore;
+    const rep = r.multScore >= p.multScore ? r : p;
+    if (bestScore < 0 || mult > bestScore * 1.01) {
+      bestScore = mult;
+      bestAdd = add;
+      best = { rpm: rep.rpm, peakHz: rep.peakHz, peakPower: rep.peakPower, harmonicPower: rep.harmonicPower };
+    } else if (bestScore > 0 && Math.abs(mult - bestScore) <= bestScore * 0.01 && add > bestAdd) {
+      bestAdd = add;
+      best = { rpm: rep.rpm, peakHz: rep.peakHz, peakPower: rep.peakPower, harmonicPower: rep.harmonicPower };
+    }
+  }
+  if (!Number.isFinite(best.rpm)) {
+    const rBest = pickRpmFromSpectrum(rollPowers, sampleRate, fftSize, freqMin, freqMax, snrThreshold);
+    const pBest = pickRpmFromSpectrum(pitchPowers, sampleRate, fftSize, freqMin, freqMax, snrThreshold);
+    const rOk = Number.isFinite(rBest.rpm);
+    const pOk = Number.isFinite(pBest.rpm);
+    if (rOk && !pOk) return rBest;
+    if (pOk && !rOk) return pBest;
+    if (rOk && pOk) {
+      const rScore = rBest.peakPower * Math.max(rBest.harmonicPower, 1e-12);
+      const pScore = pBest.peakPower * Math.max(pBest.harmonicPower, 1e-12);
+      return rScore >= pScore ? rBest : pBest;
+    }
+  }
+  return best;
+}
+/**
  * 슬라이딩 윈도우 FFT로 RPM 시계열 추정 (동기 코어).
- * Roll/Pitch 중 윈도우별 RMS가 큰 축 선택 (Yaw는 테일로터 지배적이므로 제외).
+ * 외부 제안 검증 3 반영: 윈도우별 RMS가 큰 축 하나만 쓰지 않고
+ * Roll/Pitch 양쪽 스펙트럼의 하모닉 곱 스코어를 합산(combinedScore)해 선택.
+ * (한 축에만 강한 구조 공진은 합산에서 자연 탈락한다.)
  */
 export function estimateRpmTimeSeries(
   gyroRoll: Float32Array,
@@ -119,61 +334,45 @@ export function estimateRpmTimeSeries(
   const timeMs: number[] = [];
   const rpm: number[] = [];
   if (total < windowSize || sampleRate <= 0) return { timeMs, rpm };
-  const kMin = Math.max(1, Math.floor((freqMin * fftSize) / sampleRate));
-  const kMax = Math.min(fftSize / 2 - 1, Math.ceil((freqMax * fftSize) / sampleRate));
   const real = new Float32Array(fftSize);
   const imag = new Float32Array(fftSize);
-  const seg = new Float32Array(windowSize);
+  const segR = new Float32Array(windowSize);
+  const segP = new Float32Array(windowSize);
   for (let start = 0; start + windowSize <= total; start += stepSize) {
-    let sumR = 0; let sumP = 0;
-    for (let i = 0; i < windowSize; i++) {
-      const v1 = gyroRoll[start + i]; const v2 = gyroPitch[start + i];
-      sumR += v1 * v1; sumP += v2 * v2;
-    }
-    const src = sumR >= sumP ? gyroRoll : gyroPitch;
-    let mean = 0;
-    for (let i = 0; i < windowSize; i++) mean += src[start + i];
-    mean /= windowSize;
+    // Roll/Pitch 각각 DC 제거 + 해닝 (RMS 승자독식 대신 양축 유지)
+    let meanR = 0; let meanP = 0;
+    for (let i = 0; i < windowSize; i++) { meanR += gyroRoll[start + i]; meanP += gyroPitch[start + i]; }
+    meanR /= windowSize; meanP /= windowSize;
     const denom = windowSize - 1;
     for (let i = 0; i < windowSize; i++) {
       const w = 0.5 * (1 - Math.cos((2 * Math.PI * i) / denom));
-      seg[i] = (src[start + i] - mean) * w;
+      segR[i] = (gyroRoll[start + i] - meanR) * w;
+      segP[i] = (gyroPitch[start + i] - meanP) * w;
     }
-    real.fill(0); imag.fill(0); real.set(seg);
-    try { complexFft(real, imag); } catch {
-      timeMs.push(((start + windowSize / 2) / sampleRate) * 1000);
-      rpm.push(NaN); continue;
+    const halfN = fftSize / 2;
+    let pickRpm = NaN;
+    try {
+      real.fill(0); imag.fill(0); real.set(segR);
+      complexFft(real, imag);
+      const rollPowers = new Float32Array(halfN);
+      for (let k = 0; k < halfN; k++) rollPowers[k] = real[k] * real[k] + imag[k] * imag[k];
+      real.fill(0); imag.fill(0); real.set(segP);
+      complexFft(real, imag);
+      const pitchPowers = new Float32Array(halfN);
+      for (let k = 0; k < halfN; k++) pitchPowers[k] = real[k] * real[k] + imag[k] * imag[k];
+      pickRpm = pickRpmCombined(rollPowers, pitchPowers, sampleRate, fftSize, freqMin, freqMax, snrThr).rpm;
+    } catch {
+      pickRpm = NaN;
     }
-    const count = kMax - kMin + 1;
-    const powers = new Float32Array(count);
-    let sumPower = 0; let peakK = -1; let peakPower = 0;
-    for (let k = kMin; k <= kMax; k++) {
-      const p = real[k] * real[k] + imag[k] * imag[k];
-      powers[k - kMin] = p; sumPower += p;
-      if (p > peakPower) { peakPower = p; peakK = k; }
-    }
-    const meanPower = sumPower / Math.max(1, count);
     const tMs = ((start + windowSize / 2) / sampleRate) * 1000;
-    if (peakK < 0 || !(peakPower >= meanPower * snrThr) || !(meanPower > 0)) {
-      timeMs.push(tMs); rpm.push(NaN); continue;
-    }
-    let refinedK = peakK;
-    const li = peakK - kMin;
-    if (li > 0 && li < count - 1) {
-      const a = powers[li - 1]; const b = powers[li]; const c = powers[li + 1];
-      const d = a - 2 * b + c;
-      if (Math.abs(d) > 1e-12) {
-        const delta = (0.5 * (a - c)) / d;
-        if (Math.abs(delta) <= 1) refinedK = peakK + delta;
-      }
-    }
     timeMs.push(tMs);
-    rpm.push(((refinedK * sampleRate) / fftSize) * 60);
+    rpm.push(pickRpm);
   }
   interpolateNaN(rpm);
   return { timeMs, rpm };
 }
 
+/** 메인 스레드 블로킹 방지: 일정 윈도우마다 이벤트 루프에 양보하는 비동기 추정 */
 export function resampleRpmToFrameTime(series: RpmTimeSeries, frameTimeSec: Float32Array | number[]): Float32Array {
   const n = frameTimeSec.length;
   const out = new Float32Array(n);
@@ -207,62 +406,40 @@ export async function estimateRpmTimeSeriesAsync(
   const windowSize = Math.max(64, Math.floor(STFT_WINDOW_SEC * sampleRate));
   const stepSize = Math.max(1, Math.floor(STFT_STEP_SEC * sampleRate));
   const fftSize = nextPow2(windowSize);
-  const kMin = Math.max(1, Math.floor((STFT_FREQ_MIN_HZ * fftSize) / sampleRate));
-  const kMax = Math.min(fftSize / 2 - 1, Math.ceil((STFT_FREQ_MAX_HZ * fftSize) / sampleRate));
   const timeMs: number[] = [];
   const rpm: number[] = [];
   if (total < windowSize || sampleRate <= 0) return { timeMs, rpm };
   const numWindows = Math.floor((total - windowSize) / stepSize) + 1;
   const real = new Float32Array(fftSize);
   const imag = new Float32Array(fftSize);
-  const seg = new Float32Array(windowSize);
+  const segR = new Float32Array(windowSize);
+  const segP = new Float32Array(windowSize);
   let wi = 0;
   for (let start = 0; start + windowSize <= total; start += stepSize, wi++) {
-    let sumR = 0; let sumP = 0;
-    for (let i = 0; i < windowSize; i++) {
-      const v1 = gyroRoll[start + i]; const v2 = gyroPitch[start + i];
-      sumR += v1 * v1; sumP += v2 * v2;
-    }
-    const src = sumR >= sumP ? gyroRoll : gyroPitch;
-    let mean = 0;
-    for (let i = 0; i < windowSize; i++) mean += src[start + i];
-    mean /= windowSize;
+    let meanR = 0; let meanP = 0;
+    for (let i = 0; i < windowSize; i++) { meanR += gyroRoll[start + i]; meanP += gyroPitch[start + i]; }
+    meanR /= windowSize; meanP /= windowSize;
     const denom = windowSize - 1;
     for (let i = 0; i < windowSize; i++) {
       const w = 0.5 * (1 - Math.cos((2 * Math.PI * i) / denom));
-      seg[i] = (src[start + i] - mean) * w;
+      segR[i] = (gyroRoll[start + i] - meanR) * w;
+      segP[i] = (gyroPitch[start + i] - meanP) * w;
     }
-    real.fill(0); imag.fill(0); real.set(seg);
-    try { complexFft(real, imag); } catch {
-      timeMs.push(((start + windowSize / 2) / sampleRate) * 1000);
-      rpm.push(NaN); continue;
-    }
-    const count = kMax - kMin + 1;
-    const powers = new Float32Array(count);
-    let sumPower = 0; let peakK = -1; let peakPower = 0;
-    for (let k = kMin; k <= kMax; k++) {
-      const p = real[k] * real[k] + imag[k] * imag[k];
-      powers[k - kMin] = p; sumPower += p;
-      if (p > peakPower) { peakPower = p; peakK = k; }
-    }
-    const meanPower = sumPower / Math.max(1, count);
+    const halfN = fftSize / 2;
+    let pickRpm = NaN;
+    try {
+      real.fill(0); imag.fill(0); real.set(segR);
+      complexFft(real, imag);
+      const rollPowers = new Float32Array(halfN);
+      for (let k = 0; k < halfN; k++) rollPowers[k] = real[k] * real[k] + imag[k] * imag[k];
+      real.fill(0); imag.fill(0); real.set(segP);
+      complexFft(real, imag);
+      const pitchPowers = new Float32Array(halfN);
+      for (let k = 0; k < halfN; k++) pitchPowers[k] = real[k] * real[k] + imag[k] * imag[k];
+      pickRpm = pickRpmCombined(rollPowers, pitchPowers, sampleRate, fftSize).rpm;
+    } catch { pickRpm = NaN; }
     const tMs = ((start + windowSize / 2) / sampleRate) * 1000;
-    if (peakK < 0 || !(peakPower >= meanPower * STFT_SNR_THRESHOLD) || !(meanPower > 0)) {
-      timeMs.push(tMs); rpm.push(NaN);
-    } else {
-      let refinedK = peakK;
-      const li = peakK - kMin;
-      if (li > 0 && li < count - 1) {
-        const a = powers[li - 1]; const b = powers[li]; const c2 = powers[li + 1];
-        const d = a - 2 * b + c2;
-        if (Math.abs(d) > 1e-12) {
-          const delta = (0.5 * (a - c2)) / d;
-          if (Math.abs(delta) <= 1) refinedK = peakK + delta;
-        }
-      }
-      timeMs.push(tMs);
-      rpm.push(((refinedK * sampleRate) / fftSize) * 60);
-    }
+    timeMs.push(tMs); rpm.push(pickRpm);
     if (wi % 200 === 199) {
       onProgress?.(wi + 1, numWindows);
       await new Promise<void>(resolve => setTimeout(resolve, 0));

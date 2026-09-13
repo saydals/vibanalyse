@@ -52,6 +52,27 @@ const s2 = estimateRpmTimeSeries(r2, p2, sr2);
 const pb = performance.now();
 console.log(`[perf] 60s@4kHz sync dt=${(pb - pa).toFixed(0)}ms windows=${s2.rpm.length} ${(pb - pa) < 2000 ? 'PASS' : 'FAIL'} (target <2000ms)`);
 
+// Case 6: 스크린샷 케이스 — 1P(47.3Hz) 약함 + 2P(79.5Hz... 아니라 94.6Hz) 강함
+// 실제로는 1P=47.3이 아니라 2P=79.5가 지배적 → 진짜 1P는 39.75Hz=2385RPM
+// 합성: 1P 39.75Hz(진폭 2) + 2P 79.5Hz(진폭 10)
+{
+  const sr6 = 2000;
+  const n6 = sr6 * 10;
+  const r6 = new Float32Array(n6);
+  const p6 = new Float32Array(n6);
+  for (let i = 0; i < n6; i++) {
+    const t = i / sr6;
+    r6[i] = 2 * Math.sin(2 * Math.PI * 39.75 * t) + 10 * Math.sin(2 * Math.PI * 79.5 * t);
+    p6[i] = 1.5 * Math.sin(2 * Math.PI * 39.75 * t + 0.3) + 8 * Math.sin(2 * Math.PI * 79.5 * t + 0.5);
+  }
+  const s6 = estimateRpmTimeSeries(r6, p6, sr6);
+  const v6 = s6.rpm.filter(v => Number.isFinite(v));
+  const a6 = v6.reduce((a, b) => a + b, 0) / Math.max(1, v6.length);
+  // 구방식(최대피크)은 79.5*60=4770 오답, 신방식은 39.75*60=2385 정답이어야 함
+  const ok6 = Math.abs(a6 - 2385) <= 100;
+  console.log(`[2P-dominant] avg=${a6.toFixed(1)} expected=2385 ${ok6 ? 'PASS' : 'FAIL (2P 오인)'} valid=${v6.length}/${s6.rpm.length}`);
+}
+
 // Case 5: async pipeline end-to-end
 const fakeLog: any = { gyro: { roll, pitch }, time, sampleRateHz: sr, totalFrames: n };
 const est = await estimateRpmForLogAsync(fakeLog);
