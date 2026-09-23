@@ -23,15 +23,15 @@ export interface BlackboxLog {
     pitch: Float32Array; // deg/s
     yaw: Float32Array;   // deg/s
   };
-  /** gyroRAW (미필터) — BBL에 로깅된 경우만 존재. 없으면 undefined */
+  /** gyroRAW (unfiltered) — present only when logged in the BBL; undefined otherwise */
   gyroRaw?: {
     roll: Float32Array;  // deg/s
     pitch: Float32Array; // deg/s
     yaw: Float32Array;   // deg/s
   };
-  /** gyroADC[n] (필터 통과 자이로) 필드가 로그에 기록되어 있는지 */
+  /** Whether the gyroADC[n] (filtered gyro) field is logged in this log */
   hasGyroFiltered: boolean;
-  /** gyroRAW[n] (미필터 자이로) 필드가 로그에 기록되어 있는지 */
+  /** Whether the gyroRAW[n] (unfiltered gyro) field is logged in this log */
   hasGyroRaw: boolean;
   acc: {
     x: Float32Array; // G
@@ -40,7 +40,7 @@ export interface BlackboxLog {
   };
   rpm?: Float32Array; // Main Rotor RPM
   tailRpm?: Float32Array; // Tail RPM
-  /** RPM 데이터 출처: sensor=센서(headspeed), stft_estimated=자이로 STFT 추정, none=없음 */
+  /** RPM source: sensor=headspeed sensor, stft_estimated=gyro STFT estimate, none=unavailable */
   rpmSource: RpmSource;
   throttle?: Float32Array; // 0 - 100 %
   collective?: Float32Array; // % (-100 to +100 or 0 to 100)

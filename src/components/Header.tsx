@@ -62,7 +62,7 @@ export const Header: React.FC<HeaderProps> = ({
                       value={idx}
                       className={isDark ? 'bg-slate-900 text-white' : 'bg-white text-slate-800'}
                     >
-                      로그 #{idx + 1} ({log.durationSec.toFixed(1)}s)
+                      Log #{idx + 1} ({log.durationSec.toFixed(1)}s)
                     </option>
                   ))}
                 </select>
@@ -80,16 +80,16 @@ export const Header: React.FC<HeaderProps> = ({
                 }`}
               >
                 <Upload className="w-3.5 h-3.5 text-cyan-500" />
-                <span className="hidden sm:inline">BBL 열기</span>
-                <span className="sm:hidden">파일</span>
+                <span className="hidden sm:inline">Open BBL</span>
+                <span className="sm:hidden">File</span>
               </button>
             )}
 
             {/* Theme Toggle Button (Light/Dark) */}
             <button
               onClick={toggleTheme}
-              aria-label={isDark ? '밝은 테마로 전환' : '어두운 테마로 전환'}
-              title={isDark ? '밝은 테마 (Light Mode)' : '어두운 테마 (Dark Mode)'}
+              aria-label={isDark ? 'Switch to light theme' : 'Switch to dark theme'}
+              title={isDark ? 'Light Mode' : 'Dark Mode'}
               className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-xs font-medium transition cursor-pointer ${
                 isDark
                   ? 'bg-slate-800 hover:bg-slate-700 border-slate-700 text-amber-300 hover:text-amber-200'
@@ -99,12 +99,12 @@ export const Header: React.FC<HeaderProps> = ({
               {isDark ? (
                 <>
                   <Sun className="w-3.5 h-3.5 text-amber-400" />
-                  <span className="hidden sm:inline text-slate-200">라이트</span>
+                  <span className="hidden sm:inline text-slate-200">Light</span>
                 </>
               ) : (
                 <>
                   <Moon className="w-3.5 h-3.5 text-indigo-600" />
-                  <span className="hidden sm:inline text-slate-700">다크</span>
+                  <span className="hidden sm:inline text-slate-700">Dark</span>
                 </>
               )}
             </button>

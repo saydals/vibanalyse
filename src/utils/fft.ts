@@ -314,9 +314,9 @@ export function findVibrationPeaks(
       }
     }
 
-    // Adaptive threshold: Welch 평균 스펙트럼(bin 진폭) 기준.
-    // computeWelchPsd magnitudes는 실제 사인파 진폭의 약 1/40 (1024-Hanning) 스케일이므로
-    // 절대 바닥값도 magnitude 단위에 맞게 낮춘다. (기존 0.08/0.02 → peaks=0 원인)
+    // Adaptive threshold: based on the Welch average spectrum (bin magnitude).
+    // computeWelchPsd magnitudes are roughly 1/40 of a real sine amplitude (1024-Hanning),
+    // so the absolute floor is lowered to match the magnitude scale. (the old 0.08/0.02 produced peaks=0)
     const minFloor = name.startsWith('Acc') ? 0.001 : 0.004;
     const threshold = Math.max(minFloor, channelMax * 0.25);
 
@@ -349,29 +349,29 @@ export function findVibrationPeaks(
 
     selected.forEach(pk => {
       const peakFreq = pk.freq;
-      // Welch magnitude(≈진폭/40, 1024-Hanning) → 대략의 사인파 peak 진폭(°/s, G)으로 환산.
+      // Convert Welch magnitude (~amplitude/40, 1024-Hanning) into an approximate sine peak amplitude (°/s, G).
       // A ≈ magnitude × 2·sqrt(sum(w²)) ≈ magnitude × 39.2  (windowSize=1024, Hanning)
-      // 이 값은 analyzeVibrations 진단 임계값(8, 6 °/s)과 동일 단위로 맞춰진다.
+      // This keeps the value in the same unit as the analyzeVibrations diagnostic thresholds (8, 6 °/s).
       const maxAmp = pk.amp * 39.2;
-      let source = '미확인 고주파 진동 (Uncorrelated)';
+      let source = 'Uncorrelated high-frequency vibration';
 
       if (main1P > 0) {
         if (Math.abs(peakFreq - main1P) <= 5.0) {
-          source = `메인 로터 1P (${Math.round(main1P * 60)} RPM) - 블레이드 밸런스/스핀들 샤프트 점검 필요`;
+          source = `Main rotor 1P (${Math.round(main1P * 60)} RPM) - check blade balance / spindle shaft`;
         } else if (Math.abs(peakFreq - main2P) <= 8.0) {
-          source = `메인 로터 2P (블레이드 통과/트래킹 오차) - 피치 링크 및 블레이드 각도 점검`;
+          source = `Main rotor 2P (blade passage / tracking error) - check pitch links and blade angle`;
         } else if (Math.abs(peakFreq - tail1P) <= 15.0) {
-          source = `테일 로터 1P (~${Math.round(tail1P)} Hz) - 테일 블레이드 무게/테일 샤프트 휨 점검`;
+          source = `Tail rotor 1P (~${Math.round(tail1P)} Hz) - check tail blade weight / bent tail shaft`;
         } else if (motor1P > 0 && Math.abs(peakFreq - motor1P) <= 25.0) {
-          source = `모터 1P 회전 진동 (~${Math.round(motor1P)} Hz) - 모터 베어링/모터 마운트 점검`;
+          source = `Motor 1P rotational vibration (~${Math.round(motor1P)} Hz) - check motor bearings / motor mount`;
         } else if (peakFreq > 250 && peakFreq < 600) {
-          source = `고주파 기어 매시/모터 진동 (~${Math.round(peakFreq)} Hz) - 기어 백래시/피니언 마모`;
+          source = `High-frequency gear mesh / motor vibration (~${Math.round(peakFreq)} Hz) - gear backlash / pinion wear`;
         }
       } else {
         if (peakFreq >= 20 && peakFreq <= 45) {
-          source = `메인 로터 대역 (~${Math.round(peakFreq * 60)} RPM 추정)`;
+          source = `Main rotor band (~${Math.round(peakFreq * 60)} RPM estimate)`;
         } else if (peakFreq >= 90 && peakFreq <= 220) {
-          source = `테일 로터 고주파 대역 (~${Math.round(peakFreq)} Hz)`;
+          source = `Tail rotor high-frequency band (~${Math.round(peakFreq)} Hz)`;
         }
       }
 

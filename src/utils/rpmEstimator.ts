@@ -1,6 +1,6 @@
 /**
- * Gyro STFT 기반 RPM 추정 모듈
- * - RPM 센서(headspeed)가 없는 BBL 로그에서 Roll/Pitch 자이로 STFT로 시간대별 RPM 추정
+ * Gyro STFT based RPM estimation module
+ * - Estimates the RPM over time from Roll/Pitch gyro STFT on BBL logs without an RPM (headspeed) sensor
  */
 import { complexFft } from './fft';
 import type { BlackboxLog } from '../types/blackbox';
@@ -10,15 +10,15 @@ export const STFT_STEP_SEC = 0.1;
 export const STFT_FREQ_MIN_HZ = 20;
 export const STFT_FREQ_MAX_HZ = 80;
 export const STFT_SNR_THRESHOLD = 3;
-/** 2P(블레이드 통과) 고조파 검증 허용 오차 (Hz) */
+/** Tolerance (Hz) for validating the 2P (blade passage) harmonic */
 export const STFT_HARMONIC_TOL_HZ = 3;
-/** 2P 고조파가 1P 후보 대비 최소 몇 배여야 1P로 인정하는지 */
+/** Minimum power ratio of the 2P harmonic to a 1P candidate for it to be accepted as 1P */
 export const STFT_HARMONIC_MIN_RATIO = 0.15;
 /**
- * 탐색 주파수 범위 근거:
- * - 외부 제안(RPM 800~4200 → 13.3~70Hz)은 79.5Hz를 범위 탈락시키지만,
- *   정상 고RPM 기체(1P 70~80Hz = 4200~4800RPM)까지 잘라내므로 미채택.
- * - 20~80Hz 유지 + 하모닉 곱 스코어로 79.5Hz 오검출을 원천 탈락시킨다.
+ * Rationale for the search frequency range:
+ * - The external proposal (RPM 800~4200 → 13.3~70Hz) would exclude 79.5Hz, but it also
+ *   cuts off normal high-RPM helicopters (1P 70~80Hz = 4200~4800RPM), so it was not adopted.
+ * - Keep 20~80Hz and let the harmonic product score eliminate 79.5Hz false detections at the source.
  */
 
 export interface RpmTimeSeries {
@@ -68,7 +68,7 @@ export function interpolateNaN(rpm: number[]): void {
 export function smoothRpm(rpm: number[], medianWindow = 5, avgWindow = 3): number[] {
   const n = rpm.length;
   if (n === 0) return [];
-  // 1차: 중앙값 필터 — 이웃 중앙값으로 교체 (스파이크 제거, 스로틀 추종은 보존)
+  // Pass 1: median filter — replace each sample with the neighbour median (removes spikes, keeps throttle tracking)
   const half = Math.floor(medianWindow / 2);
   const med: number[] = new Array(n);
   for (let i = 0; i < n; i++) {
@@ -87,8 +87,8 @@ export function smoothRpm(rpm: number[], medianWindow = 5, avgWindow = 3): numbe
     }
     avg[i] = c > 0 ? s / c : med[i];
   }
-  // 3차: Hampel 패스 — 이동평균에 스며든 연속 스파이크(≤4개) 제거.
-  // 점진적 스로틀 변화(윈도우 내 < 250RPM)는 보존된다.
+  // Pass 3: Hampel pass — removes runs of spikes (≤4 samples) that leaked into the moving average.
+  // Gradual throttle changes (< 250RPM within the window) are preserved.
   const h3 = 4;
   const out: number[] = new Array(n);
   for (let i = 0; i < n; i++) {
@@ -108,11 +108,11 @@ export function smoothRpm(rpm: number[], medianWindow = 5, avgWindow = 3): numbe
 }
 
 /**
- * 단일 스펙트럼(power, 0..Nyquist)에서 RPM 선택.
- * 규칙: 20~80Hz 내 로컬 피크들 중 하모닉 곱 스코어(p1 × p2)가 최대인 후보를 1P로 선택.
- * (외부 제안 검증 2의 핵심을 채택: 47.3Hz는 p(47.3)×p(94.7)が高く 채택,
- *  79.5Hz는 p(79.5)×p(159)에 피크가 없어 탈락한다.)
- * 반환: { rpm, peakHz, peakPower, harmonicPower } — 유효 후보 없으면 rpm=NaN
+ * Select the RPM from a single spectrum (power, 0..Nyquist).
+ * Rule: among the local peaks within 20~80Hz, pick the candidate with the highest harmonic product score (p1 × p2) as 1P.
+ * (Adopts the core of external verification 2: 47.3Hz wins because p(47.3)×p(94.7) is high,
+ *  while 79.5Hz is dropped because p(79.5)×p(159) has no peak.)
+ * Returns: { rpm, peakHz, peakPower, harmonicPower } — rpm=NaN when there is no valid candidate
  */
 export interface SpectrumPick {
   rpm: number; peakHz: number; peakPower: number; harmonicPower: number;
@@ -120,9 +120,9 @@ export interface SpectrumPick {
 }
 
 /**
- * 단일 스펙트럼 후보 스코어링 (외부 제안 검증 2 핵심 + 기존 가드).
- * - powerAtHz: 특정 주파수 ±2빈 최대값 조회
- * - score = p1 x p2 (하모닉 곱), SNR 게이트 + 2P오인 스킵 포함
+ * Score candidates within a single spectrum (core of external verification 2 + existing guards).
+ * - powerAtHz: maximum value within ±2 bins of the given frequency
+ * - score = p1 x p2 (harmonic product), including the SNR gate and the 2P misdetection skip
  */
 export function scoreSpectrumPeaks(
   powers: Float32Array,
@@ -137,12 +137,12 @@ export function scoreSpectrumPeaks(
   const kMax = Math.min(Math.floor(powers.length) - 1, Math.ceil((freqMax * fftSize) / sampleRate));
   const binHz = sampleRate / fftSize;
   if (kMax <= kMin || !(binHz > 0)) return new Map<number, SpectrumPick>();
-  // 범위 평균 파워 (SNR 게이트용)
+  // Average power over the range (used by the SNR gate)
   let sum = 0;
   for (let k = kMin; k <= kMax; k++) sum += powers[k];
   const meanPower = sum / Math.max(1, kMax - kMin + 1);
   if (!(meanPower > 0)) return new Map<number, SpectrumPick>();
-  // 특정 주파수 파워 조회: ±2빈(외부 제안 powerAtHz) + 허용오차 병합
+  // Power lookup at a frequency: ±2 bins (the proposed powerAtHz) merged with the tolerance
   const tolBins = Math.max(2, Math.round(STFT_HARMONIC_TOL_HZ / binHz));
   const powerAtHz = (freqHz: number): number => {
     const kc = Math.round((freqHz * fftSize) / sampleRate);
@@ -176,18 +176,18 @@ export function scoreSpectrumPeaks(
   for (let k = kMin + 1; k <= kMax - 1; k++) {
     const p = powers[k];
     if (!(p > powers[k - 1]) || !(p >= powers[k + 1])) continue;
-    // SNR 게이트: 강한 피크는 그대로 통과.
-    // 약한 피크라도 2배 위치에 평균 이상의 에너지가 있으면 1P 후보로 인정
-    // (스크린샷: 1P 47Hz가 평균의 1.75배로 약해도 2P 94.6Hz 받침으로 살림.
-    //  SNR 3배를 그대로 요구하면 진짜 1P가 탈락하고 NaN이 되므로 완화한다.)
+    // SNR gate: strong peaks always pass.
+    // Even a weak peak is accepted as a 1P candidate when the doubled frequency carries above-average energy
+    // (screenshot case: 1P 47Hz at only 1.75x the average still survives thanks to the 2P 94.6Hz support.
+    //  Requiring the full 3x SNR would drop the real 1P and yield NaN, so the gate is relaxed.)
     if (!(p >= meanPower * snrThreshold)) {
-      // 절대 하한: 노이즈 플로어 차단 (평균 x 0.5 미만은 무조건 탈락)
+      // Absolute floor: block the noise floor (anything below average x 0.5 is always dropped)
       if (!(p >= meanPower * 0.5)) continue;
       const f = (k * sampleRate) / fftSize;
       const fDouble = f * 2;
       if (fDouble >= freqMin && fDouble <= nyquist) {
-        // 2배 위치 판정은 절대값이 아니라 로컬 피크 존재 여부로 판단한다.
-        // (79.5Hz 공진이 평균을 부풀리면 진짜 2P 94.6Hz가 평균 이하로 보여 탈락하므로)
+        // The doubled-frequency test relies on the presence of a local peak instead of an absolute value.
+        // (when the 79.5Hz resonance inflates the average, the real 2P at 94.6Hz would look below average and be dropped)
         const kd = Math.round((fDouble * fftSize) / sampleRate);
         let dblPeak = false;
         for (let j = kd - tolBins; j <= kd + tolBins; j++) {
@@ -198,13 +198,13 @@ export function scoreSpectrumPeaks(
         if (!dblPeak) continue;
       } else continue;
     }
-    // 강한 피크 f의 f/2 위치에 평균 이상 에너지가 있으면 f는 2P로 간주하고 스킵.
-    // 진짜 1P(f/2)는 자체 피크(또는 완화 게이트)로 평가됨.
+    // When a strong peak f has above-average energy at f/2, treat f as 2P and skip it.
+    // A real 1P (f/2) is evaluated on its own peak (or the relaxed gate).
     const f = (k * sampleRate) / fftSize;
     const fSub = f / 2;
     if (fSub >= freqMin) {
-      // fSub 조회는 ±1빈으로 좁게: 강한 피크의 사이드로브가 이웃 후보를
-      // 2P로 오인 스킵하는 것 방지 (47.3Hz가 79.5Hz 사이드로브에 묻히지 않게)
+      // The fSub lookup uses a narrow ±1 bin: this prevents sidelobes of a strong peak from
+      // making a neighbouring candidate look like a 2P (so 47.3Hz is not buried by the 79.5Hz sidelobe)
       const kcSub = Math.round((fSub * fftSize) / sampleRate);
       let subMax = 0;
       for (let j = kcSub - 1; j <= kcSub + 1; j++) {
@@ -213,7 +213,7 @@ export function scoreSpectrumPeaks(
       if (subMax >= meanPower * 1.5) {
         const f2 = f * 2;
         const hMax = f2 < nyquist ? powerAtHz(f2) : 0;
-        // f/2가 로컬 피크(양옆보다 큼)일 때만 f를 2P로 스킵. 완만한 언덕은 스킵 금지.
+        // Only skip f as 2P when f/2 is a local peak (larger than both neighbours). Gentle slopes are never skipped.
         const kcS = kcSub;
         const isSubPeak = kcS > 0 && kcS < powers.length - 1 &&
           powers[kcS] >= powers[kcS - 1] && powers[kcS] > powers[kcS + 1];
@@ -225,7 +225,7 @@ export function scoreSpectrumPeaks(
   return picks;
 }
 
-/** 단일 스펙트럼에서 RPM 선택 (하모닉 곱 스코어 최대 후보). */
+/** Select the RPM from a single spectrum (candidate with the highest harmonic product score). */
 export function pickRpmFromSpectrum(
   powers: Float32Array,
   sampleRate: number,
@@ -253,9 +253,9 @@ export function pickRpmFromSpectrum(
 }
 
 /**
- * Roll+Pitch 교차 하모닉 스코어 (외부 제안 검증 3).
- * combinedScore(f) = rollMult(f) + pitchMult(f). 한 축에만 강한 구조 공진은 탈락.
- * 양쪽 모두 후보가 없으면 NaN, 한쪽만 있으면 단축 폴백.
+ * Roll+Pitch combined harmonic score (external verification 3).
+ * combinedScore(f) = rollMult(f) + pitchMult(f). A structural resonance on one axis alone is dropped.
+ * If neither axis has a candidate the result is NaN; if only one does, it falls back to that axis.
  */
 export function pickRpmCombined(
   rollPowers: Float32Array,
@@ -311,10 +311,10 @@ export function pickRpmCombined(
   return best;
 }
 /**
- * 슬라이딩 윈도우 FFT로 RPM 시계열 추정 (동기 코어).
- * 외부 제안 검증 3 반영: 윈도우별 RMS가 큰 축 하나만 쓰지 않고
- * Roll/Pitch 양쪽 스펙트럼의 하모닉 곱 스코어를 합산(combinedScore)해 선택.
- * (한 축에만 강한 구조 공진은 합산에서 자연 탈락한다.)
+ * Estimate the RPM time series with a sliding-window FFT (synchronous core).
+ * Reflects external verification 3: instead of using only the axis with the larger window RMS,
+ * the harmonic product scores of both the Roll and Pitch spectra are summed (combinedScore) to choose.
+ * (A structural resonance present on only one axis naturally drops out of the sum.)
  */
 export function estimateRpmTimeSeries(
   gyroRoll: Float32Array,
@@ -339,7 +339,7 @@ export function estimateRpmTimeSeries(
   const segR = new Float32Array(windowSize);
   const segP = new Float32Array(windowSize);
   for (let start = 0; start + windowSize <= total; start += stepSize) {
-    // Roll/Pitch 각각 DC 제거 + 해닝 (RMS 승자독식 대신 양축 유지)
+    // Remove DC and apply a Hanning window on Roll and Pitch separately (keeps both axes instead of winner-takes-all by RMS)
     let meanR = 0; let meanP = 0;
     for (let i = 0; i < windowSize; i++) { meanR += gyroRoll[start + i]; meanP += gyroPitch[start + i]; }
     meanR /= windowSize; meanP /= windowSize;
@@ -372,7 +372,7 @@ export function estimateRpmTimeSeries(
   return { timeMs, rpm };
 }
 
-/** 메인 스레드 블로킹 방지: 일정 윈도우마다 이벤트 루프에 양보하는 비동기 추정 */
+/** Resample the estimated RPM series onto the log frame time base (linear interpolation). */
 export function resampleRpmToFrameTime(series: RpmTimeSeries, frameTimeSec: Float32Array | number[]): Float32Array {
   const n = frameTimeSec.length;
   const out = new Float32Array(n);
@@ -395,7 +395,7 @@ export function resampleRpmToFrameTime(series: RpmTimeSeries, frameTimeSec: Floa
   }
   return out;
 }
-/** 메인 스레드 블로킹 방지: 일정 윈도우마다 이벤트 루프에 양보하는 비동기 추정 */
+/** Async estimation that yields to the event loop every window to avoid blocking the main thread */
 export async function estimateRpmTimeSeriesAsync(
   gyroRoll: Float32Array,
   gyroPitch: Float32Array,
@@ -455,7 +455,7 @@ function medianOfFinite(values: number[]): number {
   if (f.length === 0) return NaN;
   return median(f);
 }
-/** 로그 전체 파이프라인: STFT -> 스무딩 -> 프레임 리샘플 */
+/** Full-log pipeline: STFT -> smoothing -> frame resample */
 export async function estimateRpmForLogAsync(
   log: Pick<import('../types/blackbox').BlackboxLog, 'gyro' | 'time' | 'sampleRateHz' | 'totalFrames'>,
   onProgress?: (done: number, total: number) => void,
@@ -505,7 +505,7 @@ function findIndexForTime(time: Float32Array | number[], target: number): number
   return lo;
 }
 
-/** 타임라인 바 RPM 조회: 빨간바 안->지점+-0.5s, 밖->파란범위 전체 */
+/** Timeline bar RPM lookup: inside the red bar -> point ±0.5s, outside -> the whole blue range */
 export function getRpmForSelection(
   log: Pick<import('../types/blackbox').BlackboxLog, 'rpm' | 'time' | 'sampleRateHz'>,
   selection: { start: number; end: number },

@@ -21,48 +21,48 @@ export const VibrationOverview: React.FC<VibrationOverviewProps> = ({
     switch (grade) {
       case 'EXCELLENT':
         return {
-          label: '기체 상태 최상 (EXCELLENT)',
+          label: 'Airframe Condition EXCELLENT',
           color: isDark
             ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
             : 'bg-emerald-50 border-emerald-300 text-emerald-800',
           icon: <ShieldCheck className="w-5 h-5 text-emerald-500" />,
-          desc: '자이로 노이즈가 매우 낮고 깨끗하여 최상의 조종성을 발휘할 수 있는 상태입니다.',
+          desc: 'Gyro noise is very low and clean, so the helicopter can deliver its best handling.',
         };
       case 'GOOD':
         return {
-          label: '기체 상태 양호 (GOOD)',
+          label: 'Airframe Condition GOOD',
           color: isDark
             ? 'bg-cyan-500/10 border-cyan-500/30 text-cyan-400'
             : 'bg-cyan-50 border-cyan-300 text-cyan-800',
           icon: <CheckCircle2 className="w-5 h-5 text-cyan-500" />,
-          desc: '일반적인 비행에 적합한 정상 수준의 잔류 진동입니다.',
+          desc: 'Residual vibration is at a normal level and is suitable for regular flight.',
         };
       case 'MODERATE':
         return {
-          label: '기체 상태 보통 (MODERATE)',
+          label: 'Airframe Condition MODERATE',
           color: isDark
             ? 'bg-amber-500/10 border-amber-500/30 text-amber-400'
             : 'bg-amber-50 border-amber-300 text-amber-800',
           icon: <AlertCircle className="w-5 h-5 text-amber-500" />,
-          desc: '약간의 기계적 진동이 감지됩니다. 블레이드 밸런스나 댐퍼 상태를 확인하세요.',
+          desc: 'Some mechanical vibration was detected. Check the blade balance and damper condition.',
         };
       case 'WARNING':
         return {
-          label: '진동 주의 (WARNING)',
+          label: 'Vibration WARNING',
           color: isDark
             ? 'bg-orange-500/10 border-orange-500/30 text-orange-400'
             : 'bg-orange-50 border-orange-300 text-orange-800',
           icon: <AlertTriangle className="w-5 h-5 text-orange-500" />,
-          desc: '특정 주파수에서 강한 진동이 지속됩니다. 비행 안정성 저하 및 모터 발열 원인.',
+          desc: 'Strong vibration persists at specific frequencies. It degrades flight stability and causes motor heat.',
         };
       case 'CRITICAL':
         return {
-          label: '심각한 진동 경고 (CRITICAL)',
+          label: 'Severe Vibration CRITICAL',
           color: isDark
             ? 'bg-rose-500/10 border-rose-500/30 text-rose-400'
             : 'bg-rose-50 border-rose-300 text-rose-800',
           icon: <AlertTriangle className="w-5 h-5 text-rose-500" />,
-          desc: '허용치를 크게 초과한 진동입니다. 기체 파손 위험이 있으므로 정밀 점검이 필요합니다.',
+          desc: 'Vibration far exceeds the tolerance limit. There is a risk of airframe damage, so a careful inspection is required.',
         };
     }
   };
@@ -80,7 +80,7 @@ export const VibrationOverview: React.FC<VibrationOverviewProps> = ({
           <div>
             <div className="flex items-center gap-2">
               <span className={`text-xs font-semibold uppercase tracking-wider ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
-                종합 진동 진단 등급
+                Overall Vibration Grade
               </span>
             </div>
             <h2 className={`text-lg sm:text-xl font-bold mt-0.5 ${isDark ? 'text-white' : 'text-slate-900'}`}>
@@ -97,7 +97,7 @@ export const VibrationOverview: React.FC<VibrationOverviewProps> = ({
           <div className={`px-3 py-1.5 rounded-xl border text-xs flex items-center gap-2 ${
             isDark ? 'bg-slate-950/80 border-slate-800' : 'bg-white/90 border-slate-200'
           }`}>
-            <span className={isDark ? 'text-slate-400' : 'text-slate-500'}>평균 자이로 RMS:</span>
+            <span className={isDark ? 'text-slate-400' : 'text-slate-500'}>Average gyro RMS:</span>
             <span className={`font-mono font-bold text-sm ${isDark ? 'text-cyan-400' : 'text-cyan-600'}`}>
               {summary.gyroRms.overall.toFixed(1)}°/s
             </span>
@@ -105,7 +105,7 @@ export const VibrationOverview: React.FC<VibrationOverviewProps> = ({
           <div className={`px-3 py-1.5 rounded-xl border text-xs flex items-center gap-2 ${
             isDark ? 'bg-slate-950/80 border-slate-800' : 'bg-white/90 border-slate-200'
           }`}>
-            <span className={isDark ? 'text-slate-400' : 'text-slate-500'}>가속도 RMS:</span>
+            <span className={isDark ? 'text-slate-400' : 'text-slate-500'}>Accelerometer RMS:</span>
             <span className={`font-mono font-bold text-sm ${isDark ? 'text-purple-400' : 'text-purple-600'}`}>
               {summary.accRms.overall.toFixed(2)}G
             </span>
@@ -122,7 +122,7 @@ export const VibrationOverview: React.FC<VibrationOverviewProps> = ({
           <div className={`flex items-center justify-between pb-2 border-b ${isDark ? 'border-slate-800' : 'border-slate-100'}`}>
             <span className={`text-xs font-medium flex items-center gap-1.5 ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
               <span className="w-2.5 h-2.5 rounded-full bg-cyan-500"></span>
-              Roll (자이로 롤 축)
+              Roll (gyro roll axis)
             </span>
             <span className={`text-[11px] font-mono ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
               Peak: {summary.gyroPeak.roll < 2 ? summary.gyroPeak.roll.toFixed(2) : summary.gyroPeak.roll.toFixed(1)}°/s
@@ -150,7 +150,7 @@ export const VibrationOverview: React.FC<VibrationOverviewProps> = ({
           <div className={`flex items-center justify-between pb-2 border-b ${isDark ? 'border-slate-800' : 'border-slate-100'}`}>
             <span className={`text-xs font-medium flex items-center gap-1.5 ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
               <span className="w-2.5 h-2.5 rounded-full bg-amber-500"></span>
-              Pitch (자이로 피치 축)
+              Pitch (gyro pitch axis)
             </span>
             <span className={`text-[11px] font-mono ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
               Peak: {summary.gyroPeak.pitch < 2 ? summary.gyroPeak.pitch.toFixed(2) : summary.gyroPeak.pitch.toFixed(1)}°/s
@@ -177,7 +177,7 @@ export const VibrationOverview: React.FC<VibrationOverviewProps> = ({
           <div className={`flex items-center justify-between pb-2 border-b ${isDark ? 'border-slate-800' : 'border-slate-100'}`}>
             <span className={`text-xs font-medium flex items-center gap-1.5 ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
               <span className="w-2.5 h-2.5 rounded-full bg-emerald-500"></span>
-              Yaw (자이로 요 축 / 테일)
+              Yaw (gyro yaw axis / tail)
             </span>
             <span className={`text-[11px] font-mono ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
               Peak: {summary.gyroPeak.yaw < 2 ? summary.gyroPeak.yaw.toFixed(2) : summary.gyroPeak.yaw.toFixed(1)}°/s
@@ -204,7 +204,7 @@ export const VibrationOverview: React.FC<VibrationOverviewProps> = ({
           <div className={`flex items-center justify-between pb-2 border-b ${isDark ? 'border-slate-800' : 'border-slate-100'}`}>
             <span className={`text-xs font-medium flex items-center gap-1.5 ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
               <Compass className={`w-3.5 h-3.5 ${isDark ? 'text-purple-400' : 'text-purple-600'}`} />
-              가속도계 진동 (G-Force)
+              Accelerometer vibration (G-Force)
             </span>
             <span className={`text-[11px] font-mono ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>Total: {summary.accRms.overall.toFixed(2)}G</span>
           </div>
@@ -233,7 +233,7 @@ export const VibrationOverview: React.FC<VibrationOverviewProps> = ({
           isDark ? 'border-slate-800 text-white' : 'border-slate-100 text-slate-900'
         }`}>
           <Wrench className={`w-4 h-4 ${isDark ? 'text-cyan-400' : 'text-cyan-600'}`} />
-          <span>헬리콥터 기계적 진단 & Rotorflight 튜닝 가이드</span>
+          <span>Helicopter Mechanical Diagnosis & Rotorflight Tuning Guide</span>
         </h3>
 
         <div className="mt-3 space-y-2.5">
@@ -273,7 +273,7 @@ export const VibrationOverview: React.FC<VibrationOverviewProps> = ({
                 <div className={`w-full sm:w-auto px-3 py-1.5 rounded-lg border font-medium text-xs ${
                   isDark ? 'bg-slate-900/80 border-inherit text-cyan-300' : 'bg-white border-inherit text-cyan-700 shadow-xs'
                 }`}>
-                  👉 권장 조치: {diag.action}
+                  👉 Recommended action: {diag.action}
                 </div>
               )}
             </div>
@@ -289,9 +289,9 @@ export const VibrationOverview: React.FC<VibrationOverviewProps> = ({
           <div className={`flex items-center justify-between pb-3 border-b ${isDark ? 'border-slate-800' : 'border-slate-100'}`}>
             <h3 className={`text-sm font-semibold flex items-center gap-2 ${isDark ? 'text-white' : 'text-slate-900'}`}>
               <Cpu className={`w-4 h-4 ${isDark ? 'text-purple-400' : 'text-purple-600'}`} />
-              <span>검출된 주요 진동 피크 (Detected Harmonic Resonance)</span>
+              <span>Detected Vibration Peaks (Detected Harmonic Resonance)</span>
             </h3>
-            <span className={`text-xs ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>클릭 시 해당 주파수 중심 점검</span>
+            <span className={`text-xs ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>Click a peak to inspect that frequency</span>
           </div>
 
           <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">

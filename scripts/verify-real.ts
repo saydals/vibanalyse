@@ -17,7 +17,7 @@ for (const log of result.logs) {
     }
     console.log(`    sensor rpm: n=${cnt} avg=${cnt ? (sum / cnt).toFixed(1) : 'n/a'} min=${mn.toFixed(0)} max=${mx.toFixed(0)}`);
   }
-  // STFT 추정 실행 (센서 유무 무관하게 비교용)
+  // Run the STFT estimate (for comparison regardless of whether an RPM sensor exists)
   if (log.totalFrames >= 500 && log.sampleRateHz > 0) {
     const t0 = performance.now();
     const series = estimateRpmTimeSeries(log.gyro.roll, log.gyro.pitch, log.sampleRateHz);

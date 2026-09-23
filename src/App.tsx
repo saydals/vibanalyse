@@ -49,13 +49,13 @@ export default function App() {
       setCurrentLogIndex(0);
     } catch (e: any) {
       console.error('[loadRealSample] Error:', e);
-      setSampleError(e?.message || '샘플 로그를 불러오지 못했습니다.');
+      setSampleError(e?.message || 'Could not load the sample log.');
     }
   }, []);
 
   useEffect(() => { loadRealSample(); }, [loadRealSample]);
 
-  // Selected FFT Window in seconds (기본값: 호버링/비행중 구간)
+  // Selected FFT window in seconds (default: hovering / in-flight section)
   const [selectedWindow, setSelectedWindow] = useState<{ start: number; end: number }>(() => {
     const dur = currentLog?.durationSec || 30;
     if (dur >= 60) return { start: 30, end: dur - 30 };
@@ -78,8 +78,8 @@ export default function App() {
   });
 
   // When log changes, update window and detected RPM.
-  // RPM 센서 없으면 Gyro STFT로 추정 RPM을 기존 rpm 배열과 동일 인터페이스로 주입.
-  // ※ 헤더 형식과 무관하게 항상 분석 시도 (Betaflight 등 비-Rotorflight 로그도 허용)
+  // When the log has no RPM sensor, inject the gyro-STFT estimate through the same interface as the rpm array.
+  // Note: the estimate is always attempted regardless of the header format (non-Rotorflight logs such as Betaflight are allowed)
   useEffect(() => {
     if (currentLog) {
       const dur = currentLog.durationSec;
@@ -110,8 +110,8 @@ export default function App() {
     }
   }, [currentLog]);
 
-  // RPM 센서 없는 로그: 자이로 STFT 추정 (비동기 청크 처리, 메인스레드 블로킹 방지)
-  // ※ RPM추정완료 UI 항목은 삭제됨 — 추정 기능 자체는 유지
+  // Logs without an RPM sensor: gyro STFT estimate (chunked asynchronously so the main thread stays responsive)
+  // Note: the "RPM estimate complete" UI item was removed — the estimation itself is still active
   useEffect(() => {
     if (!currentLog) return;
     if (currentLog.rpmSource !== 'none') {
@@ -149,23 +149,23 @@ export default function App() {
     setHeliConfig(prev => ({ ...prev, mainRpm: rpm }));
   };
 
-  // 로그 전체 길이가 MIN_ANALYSIS_SEC 미만이면 진동 분석을 하지 않는다.
+  // Skip vibration analysis when the whole log is shorter than MIN_ANALYSIS_SEC.
   const logTooShort = !!currentLog && currentLog.durationSec < MIN_ANALYSIS_SEC;
 
-  // FFT 분석에 사용할 자이로 데이터 소스: filtered=gyroADC(자이로 필터 통과), raw=gyroRAW(미필터)
+  // Gyro data source used for FFT analysis: filtered=gyroADC (after the gyro filters), raw=gyroRAW (unfiltered)
   const [gyroSource, setGyroSource] = useState<'filtered' | 'raw'>('filtered');
   const gyroSourceAvailable = useMemo(
     () => ({
-      // 플래그가 없는 로그(구 경로)는 기존 동작 유지: Filtered 표시
+      // Logs without the flag (legacy path) keep the previous behavior: report Filtered
       filtered: currentLog ? currentLog.hasGyroFiltered !== false : false,
       raw: !!currentLog?.hasGyroRaw,
     }),
     [currentLog],
   );
-  // 선택한 소스가 로그에 기록되어 있지 않으면 그래프를 그리지 않는다(빈 스펙트럼)
+  // When the selected source is not logged, no graph is drawn (empty spectrum)
   const gyroSourceLogged = gyroSourceAvailable[gyroSource];
 
-  // 로그가 바뀌면 기록이 존재하는 소스로 자동 선택한다(사용자가 직접 전환한 값은 유지).
+  // When the log changes, auto-select a source that is logged (an explicit user choice is preserved).
   const gyroSourceLogRef = useRef<BlackboxLog | null>(null);
   useEffect(() => {
     if (!currentLog || gyroSourceLogRef.current === currentLog) return;
@@ -182,7 +182,7 @@ export default function App() {
     const startIdx = Math.max(0, Math.floor(selectedWindow.start * currentLog.sampleRateHz));
     const endIdx = Math.min(currentLog.totalFrames, Math.floor(selectedWindow.end * currentLog.sampleRateHz));
 
-    // gyroRAW 필드가 없는 로그는 gyro(대체 데이터)를 그대로 사용한다.
+    // Logs without a gyroRAW field fall back to gyro (the fallback data) as-is.
     const gyroSeries = gyroSource === 'raw'
       ? (currentLog.gyroRaw ?? currentLog.gyro)
       : currentLog.gyro;
@@ -209,26 +209,26 @@ export default function App() {
     try {
       const result = await parseBlackboxFile(file, file.name);
       if (result.logs.length === 0) {
-        throw new Error('파일에서 유효한 블랙박스 비행 로그를 찾을 수 없습니다.');
+        throw new Error('No valid blackbox flight log found in the file.');
       }
       setLogs(result.logs);
       setCurrentLogIndex(0);
     } catch (err: any) {
       console.error(err);
-      setFileError(err?.message || '파일을 분석하는 중 오류가 발생했습니다. 올바른 .BBL 또는 .CSV 파일인지 확인해주세요.');
+      setFileError(err?.message || 'Something went wrong while analyzing the file. Please check that it is a valid .BBL or .CSV file.');
     } finally {
       setIsLoading(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
     }
   };
 
-  // 타임라인 바 RPM 조회 (파란 범위/빨간 지점 통합 — 센서/추정 공용)
+  // Timeline bar RPM lookup (merges the blue range / red marker — shared by sensor and estimate)
   const selectionRpm = useMemo(() => {
     if (!currentLog) return { rpm: NaN, mode: 'range' as const, count: 0 };
     return getRpmForSelection(currentLog, selectedWindow, currentTimeSec);
   }, [currentLog, selectedWindow, currentTimeSec]);
 
-  // 선택 구간 평균 RPM이 바뀌면 헤드스피드 표시도 추종
+  // Keep the displayed head speed in sync when the average RPM of the selected window changes
   useEffect(() => {
     if (!currentLog?.rpm || currentLog.rpm.length === 0) return;
     if (Number.isFinite(selectionRpm.rpm) && selectionRpm.count > 10) {
@@ -250,7 +250,7 @@ export default function App() {
         onSelectLog={setCurrentLogIndex}
         onNewFileClick={openFileExplorer}
       />
-      {/* 숨겨진 파일 입력: BBL 열기 버튼이 바로 파일탐색기로 연결 */}
+      {/* Hidden file input: the "Open BBL" button opens the file picker directly */}
       <input
         ref={fileInputRef}
         type="file"
@@ -278,12 +278,12 @@ export default function App() {
                     isDark ? 'bg-cyan-600 hover:bg-cyan-500 text-white' : 'bg-cyan-600 hover:bg-cyan-500 text-white'
                   }`}
                 >
-                  샘플 로그 다시 불러오기
+                  Reload Sample Log
                 </button>
               </>
             ) : (
               <p className={`text-sm font-semibold ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>
-                기본 샘플 로그를 불러오는 중...
+                Loading the built-in sample log...
               </p>
             )}
           </div>
@@ -297,7 +297,7 @@ export default function App() {
                 }`}
               >
                 <div className="flex flex-wrap items-center gap-2 overflow-hidden">
-                  <span className={isDark ? 'text-slate-500' : 'text-slate-400'}>기체:</span>
+                  <span className={isDark ? 'text-slate-500' : 'text-slate-400'}>Craft:</span>
                   <span className={`font-semibold truncate max-w-[160px] sm:max-w-none ${isDark ? 'text-white' : 'text-slate-900'}`}>
                     {currentLog.craftName || 'Rotorflight Helicopter'}
                   </span>
@@ -309,19 +309,19 @@ export default function App() {
 
                 <div className="flex flex-wrap items-center gap-3 font-mono text-[11px]">
                   <span className="flex items-center gap-1">
-                    <span className={isDark ? 'text-slate-500' : 'text-slate-400'}>시간:</span>
+                    <span className={isDark ? 'text-slate-500' : 'text-slate-400'}>Time:</span>
                     <span className={isDark ? 'text-white' : 'text-slate-800 font-semibold'}>
-                      {currentLog.durationSec.toFixed(1)}초
+                      {currentLog.durationSec.toFixed(1)}s
                     </span>
                   </span>
                   <span className="flex items-center gap-1">
-                    <span className={isDark ? 'text-slate-500' : 'text-slate-400'}>샘플:</span>
+                    <span className={isDark ? 'text-slate-500' : 'text-slate-400'}>Samples:</span>
                     <span className={isDark ? 'text-white' : 'text-slate-800 font-semibold'}>
                       {currentLog.sampleRateHz} Hz
                     </span>
                   </span>
                   <span className="flex items-center gap-1 hidden md:inline-flex">
-                    <span className={isDark ? 'text-slate-500' : 'text-slate-400'}>프레임:</span>
+                    <span className={isDark ? 'text-slate-500' : 'text-slate-400'}>Frames:</span>
                     <span className={isDark ? 'text-white' : 'text-slate-800 font-semibold'}>
                       {currentLog.totalFrames.toLocaleString()}
                     </span>
@@ -330,7 +330,7 @@ export default function App() {
               </div>
             )}
 
-            {/* Main Content — FFT + 타임라인 2개 박스만 유지 */}
+            {/* Main content — only the FFT and timeline boxes are kept */}
             <div className="flex flex-col gap-5">
               {fileError && (
                 <p className={`text-xs font-semibold ${isDark ? 'text-rose-300' : 'text-rose-600'}`}>
@@ -339,7 +339,7 @@ export default function App() {
               )}
               {isLoading && (
                 <p className={`text-xs font-semibold ${isDark ? 'text-cyan-300' : 'text-cyan-700'}`}>
-                  BBL 파일을 불러오는 중...
+                  Loading BBL file...
                 </p>
               )}
               {/* Interactive FFT Spectrum Chart */}
@@ -355,11 +355,11 @@ export default function App() {
                 gyroSourceAvailable={gyroSourceAvailable}
                 analysisNotice={
                   logTooShort
-                    ? `비행 기록 ${currentLog.durationSec.toFixed(1)}초 — 최소 ${MIN_ANALYSIS_SEC}초가 못 되어 분석하지 않습니다.`
+                    ? `Flight log is ${currentLog.durationSec.toFixed(1)}s — shorter than the ${MIN_ANALYSIS_SEC}s minimum, so it is not analyzed.`
                     : !gyroSourceLogged
-                    ? `선택한 데이터 ${
+                    ? `The selected data source ${
                         gyroSource === 'raw' ? 'Raw Gyro (gyroRAW)' : 'Filtered Gyro (gyroADC)'
-                      }가 이 로그에 기록되어 있지 않습니다.`
+                      } is not logged in this log.`
                     : null
                 }
               />

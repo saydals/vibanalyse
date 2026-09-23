@@ -10,12 +10,12 @@ interface FftSpectrumViewProps {
   onHeadSpeedRpmChange?: (rpm: number) => void;
   maxFreqRange?: 250 | 500 | 1000;
   onMaxFreqRangeChange?: (range: 250 | 500 | 1000) => void;
-  /** 분석 불가 안내(예: 선택 구간 < 30초). null이면 정상 스펙트럼 표시 */
+  /** Notice shown when analysis is not possible (e.g. selected window < 30s). null shows the normal spectrum */
   analysisNotice?: string | null;
-  /** FFT 분석 자이로 데이터 소스: filtered=gyroADC(필터 통과), raw=gyroRAW(미필터) */
+  /** Gyro data source for FFT analysis: filtered=gyroADC (after the gyro filters), raw=gyroRAW (unfiltered) */
   gyroSource?: 'filtered' | 'raw';
   onGyroSourceChange?: (source: 'filtered' | 'raw') => void;
-  /** 각 소스가 해당 로그에 기록되어 있는지 여부 (false면 그래프 숨김 안내) */
+  /** Whether each source is logged in this log (false shows the "graph hidden" notice) */
   gyroSourceAvailable?: { filtered: boolean; raw: boolean };
 }
 
@@ -48,26 +48,26 @@ export const FftSpectrumView: React.FC<FftSpectrumViewProps> = ({
 
   const [localHeadSpeedRpm, setLocalHeadSpeedRpm] = useState<number>(headSpeedRpm);
 
-  // 자이로 데이터 소스(Filtered=gyroADC / Raw=gyroRAW) — 상위 제어가 없으면 내부 상태 사용
+  // Gyro data source (Filtered=gyroADC / Raw=gyroRAW) — uses internal state when there is no parent control
   const [internalGyroSource, setInternalGyroSource] = useState<'filtered' | 'raw'>('filtered');
   const activeGyroSource = onGyroSourceChange ? gyroSource ?? 'filtered' : internalGyroSource;
   const setActiveGyroSource = onGyroSourceChange || setInternalGyroSource;
-  // undefined(정보 없음) / true(로그에 기록됨) / false(기록 없음 → 그래프 숨김)
+  // undefined (no information) / true (logged) / false (not logged → graph hidden)
   const gyroSourceLogged = gyroSourceAvailable ? gyroSourceAvailable[activeGyroSource] : undefined;
 
   // View state
   const [internalMaxFreqRange, setInternalMaxFreqRange] = useState<250 | 500 | 1000>(maxFreqRange);
   const activeMaxFreqRange = onMaxFreqRangeChange ? maxFreqRange : internalMaxFreqRange;
   const setActiveMaxFreqRange = onMaxFreqRangeChange || setInternalMaxFreqRange;
-  // X축 시작(스킵) 주파수: 0 ~ 50 Hz. 그래프의 X축 0점이 이 주파수로 설정된다.
-  // (저주파 대역(< 25Hz)의 과도한 진동이 다른 주파수 표시를 압도하는 문제 해결)
+  // X-axis start (skip) frequency: 0 ~ 50 Hz. The graph's X-axis zero point is set to this frequency.
+  // (solves the problem of excessive low-frequency vibration (< 25Hz) overwhelming the other frequencies on screen)
   const [skipHz, setSkipHz] = useState<number>(25);
   const [showRoll, setShowRoll] = useState(true);
   const [showPitch, setShowPitch] = useState(true);
   const [showYaw, setShowYaw] = useState(true);
-  // 피크 마커(최대 9개) 일괄 표시 ON/OFF — Y축 왼쪽 Mark 버튼
+  // Toggle all peak markers (up to 9) ON/OFF — the Mark button left of the Y-axis
   const [showPeakMarkers, setShowPeakMarkers] = useState(true);
-  // RPM 하모닉 수직선 항상 표시
+  // RPM harmonic vertical lines are always shown
   const showHarmonics = true;
 
   // Y-axis resolution mode: 'auto' | manual step presets
@@ -106,7 +106,7 @@ export const FftSpectrumView: React.FC<FftSpectrumViewProps> = ({
       fft.frequencies.length,
       Math.floor((maxFreqRange / (fft.sampleRate / 2)) * fft.frequencies.length)
     );
-    // 항상 12Hz 미만의 잡음은 제외하고, 스킵 구간도 Y축 자동 스케일에 반영하지 않는다
+    // Noise below 12Hz is always excluded, and the skip band is kept out of the Y-axis auto scale
     const minVisibleHz = Math.max(skipHz, 12);
 
     for (let i = 2; i < limitIdx; i++) {
@@ -121,7 +121,7 @@ export const FftSpectrumView: React.FC<FftSpectrumViewProps> = ({
 
   // Adaptive Y-axis configuration:
   // Peaks always appear at 90% of Y-axis height (maxAmp = maxObservedAmp / 0.9)
-  // 0.02 단위까지 세분화하여 주파수 특성을 명확히 표시
+  // Refined down to 0.02 steps so the frequency characteristics are shown clearly
   const yAxisConfig = useMemo(() => {
     let step = 0.2;
     let maxAmp = 1.0;
@@ -164,8 +164,8 @@ export const FftSpectrumView: React.FC<FftSpectrumViewProps> = ({
     for (let i = 0; i <= numSteps; i++) {
       ticks.push(+(i * step).toFixed(decimals));
     }
-    // 미세 스텝(0.01/0.02/0.05) 수동 선택 시 눈금이 수백 개가 되지 않도록
-    // 최대 40개까지만 실제 렌더링 (라벨/그리드 stride)
+    // Prevent the fine manual steps (0.01/0.02/0.05) from creating hundreds of gridlines
+    // at most 40 are actually rendered (label/grid stride)
     const tickStride = Math.max(1, Math.ceil(numSteps / 40));
 
     return {
@@ -316,12 +316,12 @@ export const FftSpectrumView: React.FC<FftSpectrumViewProps> = ({
     ctx.font = '11px sans-serif';
     ctx.textAlign = 'center';
 
-    // X축 가시 범위: [skipHz, maxFreqRange] — X축 0점이 skipHz가 되도록 매핑
+    // X-axis visible range: [skipHz, maxFreqRange] — mapped so the X-axis zero point becomes skipHz
     const freqSpan = Math.max(1, maxFreqRange - skipHz);
     const freqToX = (f: number): number => padLeft + ((f - skipHz) / freqSpan) * plotW;
 
     const freqStep = maxFreqRange <= 250 ? 25 : maxFreqRange <= 500 ? 50 : 100;
-    // 스킵 지점(X축 시작)을 원점으로 표시
+    // Draw the skip point (X-axis start) as the origin
     const originX = freqToX(skipHz);
     ctx.beginPath();
     ctx.moveTo(originX, padTop);
@@ -329,7 +329,7 @@ export const FftSpectrumView: React.FC<FftSpectrumViewProps> = ({
     ctx.stroke();
     ctx.fillText(`${skipHz}Hz`, originX, padTop + plotH + 18);
 
-    // 그 외 눈금은 skipHz 이후의 정수 배수로 배치 (skipHz=0 이면 중복 방지)
+    // Other ticks are placed at integer multiples of the step after skipHz (avoids a duplicate when skipHz=0)
     let startTick = Math.ceil(skipHz / freqStep) * freqStep;
     if (startTick === skipHz) startTick += freqStep;
     for (let f = startTick; f <= maxFreqRange; f += freqStep) {
@@ -423,7 +423,7 @@ export const FftSpectrumView: React.FC<FftSpectrumViewProps> = ({
       });
     }
 
-    // Simulated Filter Response Curve (Notch Filter) — 삭제됨
+    // Simulated Filter Response Curve (Notch Filter) — removed
 
     // Function to draw FFT line
     const drawSpectrumLine = (data: Float32Array, color: string, scaleFactor: number = 1.0) => {
@@ -436,7 +436,7 @@ export const FftSpectrumView: React.FC<FftSpectrumViewProps> = ({
 
       for (let i = 1; i < numPoints; i++) {
         const f = fft.frequencies[i];
-        if (f < skipHz) continue; // Skip Hz 아래 대역은 그리지 않는다
+        if (f < skipHz) continue; // Do not draw the band below skip Hz
         if (f > maxFreqRange) break;
 
         const val = data[i] * scaleFactor;
@@ -602,10 +602,10 @@ export const FftSpectrumView: React.FC<FftSpectrumViewProps> = ({
 
     // Check nearest harmonic
     let nearestHarmonic: string | undefined;
-    if (Math.abs(actualFreq - main1P) < 3) nearestHarmonic = '메인 1P (언밸런스)';
-    else if (Math.abs(actualFreq - main2P) < 4) nearestHarmonic = '메인 2P (블레이드 통과)';
-    else if (Math.abs(actualFreq - tail1P) < 6) nearestHarmonic = '테일 1P (테일 진동)';
-    else if (motor1P > 0 && Math.abs(actualFreq - motor1P) < 10) nearestHarmonic = '모터 회전 주파수';
+    if (Math.abs(actualFreq - main1P) < 3) nearestHarmonic = 'Main 1P (imbalance)';
+    else if (Math.abs(actualFreq - main2P) < 4) nearestHarmonic = 'Main 2P (blade passage)';
+    else if (Math.abs(actualFreq - tail1P) < 6) nearestHarmonic = 'Tail 1P (tail vibration)';
+    else if (motor1P > 0 && Math.abs(actualFreq - motor1P) < 10) nearestHarmonic = 'Motor rotational frequency';
 
     setHoverInfo({
       freq: Math.round(actualFreq * 10) / 10,
@@ -640,8 +640,8 @@ export const FftSpectrumView: React.FC<FftSpectrumViewProps> = ({
           </div>
           <div>
             <h3 className={`text-sm font-semibold flex items-center gap-1.5 ${isDark ? 'text-white' : 'text-slate-900'}`}>
-              <span>FFT 진동 주파수 스펙트럼</span>
-              {/* 현재 분석에 쓰이는 BBL 필드 표시 */}
+              <span>FFT Vibration Frequency Spectrum</span>
+              {/* BBL field currently used for the analysis */}
               <span
                 className={`px-1.5 py-0.5 rounded border font-mono text-[10px] font-medium ${
                   activeGyroSource === 'raw'
@@ -714,16 +714,16 @@ export const FftSpectrumView: React.FC<FftSpectrumViewProps> = ({
             </button>
           </div>
 
-          {/* Data Source Toggle (Raw / Filtered) — Mark 버튼 왼쪽 */}
-          {/* 폭 고정(w-[76px]) → Raw ↔ Filtered 라벨이 바뀌어도 레이아웃이 흔들리지 않음 */}
+          {/* Data Source Toggle (Raw / Filtered) — left of the Mark button */}
+          {/* Fixed width (w-[76px]) → the layout does not shift when the Raw ↔ Filtered label changes */}
           <button
             onClick={() => setActiveGyroSource(activeGyroSource === 'raw' ? 'filtered' : 'raw')}
             title={
               (activeGyroSource === 'raw'
-                ? '분석 데이터: Raw Gyro — gyroRAW (자이로 필터 통과 전)'
-                : '분석 데이터: Filtered Gyro — gyroADC (자이로 필터 통과 후)') +
-              (gyroSourceLogged === false ? '\n⚠ 이 로그에는 기록되어 있지 않습니다.' : '') +
-              `\n클릭하면 ${activeGyroSource === 'raw' ? 'Filtered' : 'Raw'}로 전환`
+                ? 'Analysis data: Raw Gyro — gyroRAW (before the gyro filters)'
+                : 'Analysis data: Filtered Gyro — gyroADC (after the gyro filters)') +
+              (gyroSourceLogged === false ? '\n⚠ This field is not logged in this log.' : '') +
+              `\nClick to switch to ${activeGyroSource === 'raw' ? 'Filtered' : 'Raw'}`
             }
             className={`w-[76px] px-2 py-1 rounded-lg border text-xs font-medium text-center transition cursor-pointer whitespace-nowrap ${
               gyroSourceLogged === false
@@ -743,10 +743,10 @@ export const FftSpectrumView: React.FC<FftSpectrumViewProps> = ({
           </button>
 
           {/* Peak Markers Toggle (Mark) + Y-Axis Step / Scale Preset Selector (dropdown) */}
-          {/* Mark 버튼: 피크 주파수 표시(최대 9개) 일괄 표시/숨김 */}
+          {/* Mark button: toggle all peak frequency markers (up to 9) on/off */}
           <button
             onClick={() => setShowPeakMarkers(v => !v)}
-            title="피크 주파수 표시(최대 9개) 일괄 표시/숨김"
+            title="Toggle all peak frequency markers (up to 9) on/off"
             className={`px-2 py-1 rounded-lg border text-xs font-medium transition cursor-pointer ${
               showPeakMarkers
                 ? isDark
@@ -763,10 +763,10 @@ export const FftSpectrumView: React.FC<FftSpectrumViewProps> = ({
             className={`flex items-center gap-1.5 rounded-lg px-2 py-1 border text-xs ${
               isDark ? 'bg-slate-950 border-slate-800' : 'bg-slate-100 border-slate-200'
             }`}
-            title="진동 크기에 따른 세로축 세분화 단위 설정"
+            title="Set the Y-axis subdivision step based on the vibration magnitude"
           >
             <span className={`text-[11px] font-medium whitespace-nowrap ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
-              Y축
+              Y-axis
             </span>
             <select
               value={yScalePreset}
@@ -777,7 +777,7 @@ export const FftSpectrumView: React.FC<FftSpectrumViewProps> = ({
                   : 'bg-white text-slate-900 border border-slate-300'
               }`}
             >
-              <option value="auto">자동 ({yAxisConfig.step}°)</option>
+              <option value="auto">Auto ({yAxisConfig.step}°)</option>
               <option value="0.01">0.01°</option>
               <option value="0.02">0.02°</option>
               <option value="0.05">0.05°</option>
@@ -794,10 +794,10 @@ export const FftSpectrumView: React.FC<FftSpectrumViewProps> = ({
             className={`flex items-center gap-1.5 rounded-lg px-2 py-1 border text-xs ${
               isDark ? 'bg-slate-950 border-slate-800' : 'bg-slate-100 border-slate-200'
             }`}
-            title="헤드스피드 RPM을 입력하면 하모닉 마커 주파수가 함께 변경됩니다"
+            title="Entering the head speed RPM also updates the harmonic marker frequencies"
           >
             <span className={`text-[11px] font-medium whitespace-nowrap ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>
-              헤드스피드
+              Head speed
             </span>
             <input
               type="text"
@@ -849,12 +849,12 @@ export const FftSpectrumView: React.FC<FftSpectrumViewProps> = ({
             </select>
           </div>
 
-          {/* Skip Hz — X축 시작(스킵) 주파수 0 ~ 50Hz */}
+          {/* Skip Hz — X-axis start (skip) frequency 0 ~ 50Hz */}
           <div
             className={`flex items-center gap-1.5 rounded-lg px-2 py-1 border text-xs ${
               isDark ? 'bg-slate-950 border-slate-800' : 'bg-slate-100 border-slate-200'
             }`}
-            title="X축 0점(시작 주파수)을 이 값으로 설정합니다. 25Hz 미만의 과도한 저주파 진동이 다른 주파수를 압도할 때 올려서 숨기세요."
+            title="Sets the X-axis zero point (start frequency) to this value. Raise it to hide excessive low-frequency vibration below 25Hz that overwhelms other frequencies."
           >
             <span className={`text-[10px] font-medium whitespace-nowrap ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
               Skip Hz

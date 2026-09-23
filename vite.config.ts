@@ -17,7 +17,7 @@ export default defineConfig(() => {
           id: '/vibanalyse/',
           name: 'Rotorflight Blackbox Vibration Analyzer',
           short_name: 'RF Vibration',
-          description: 'Rotorflight RC 헬리콥터 블랙박스(BBL) 데이터 로드 및 고성능 FFT 진동 분석 웹앱',
+          description: 'Load Rotorflight RC helicopter blackbox (BBL) logs and run high-performance FFT vibration analysis in your browser.',
           theme_color: '#0f172a',
           background_color: '#020617',
           display: 'standalone',

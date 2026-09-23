@@ -1,7 +1,7 @@
 /**
- * Raw / Filtered 자이로 소스 검증 스크립트
- * - gyroADC (필터 통과) vs gyroRAW (미필터) 필드 파싱 결과 비교
- * - 두 소스의 FFT 스펙트럼이 실제로 다른지(고주파 성분) 확인
+ * Raw / Filtered gyro source verification script
+ * - Compares the parsed gyroADC (filtered) and gyroRAW (unfiltered) fields
+ * - Checks that the FFT spectra of the two sources really differ (high-frequency content)
  * Usage: node_modules/.bin/tsx scripts/verify-gyro-source.ts [file.bbl]
  */
 import * as fs from 'node:fs';
@@ -30,7 +30,7 @@ const meanAbsDiff = (a?: Float32Array, b?: Float32Array) => {
   for (let i = 0; i < a.length; i++) s += Math.abs(a[i] - b[i]);
   return (s / Math.max(1, a.length)).toFixed(4);
 };
-/** 60Hz 이상 대역 에너지 (필터 효과 확인용) */
+/** Energy above 60Hz (used to verify the effect of the filters) */
 const highBandEnergy = (spec: Float32Array, freqs: Float32Array) => {
   let s = 0;
   for (let i = 0; i < spec.length; i++) if (freqs[i] >= 60) s += spec[i] * spec[i];

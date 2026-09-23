@@ -24,11 +24,11 @@ async function main() {
     const log = r.logs[0];
     console.log(`dur=${log.durationSec.toFixed(1)}s frames=${log.totalFrames} rate=${log.sampleRateHz}Hz`);
     const { spoolUp, inFlight } = quickWindows(log.durationSec);
-    console.log(`spoolUp: ${spoolUp ? `${spoolUp.start}~${spoolUp.end.toFixed(1)}s` : '분석불가(30초 미만)'}`);
-    console.log(`inFlight: ${inFlight ? `${inFlight.start}~${inFlight.end.toFixed(1)}s (${(inFlight.end - inFlight.start).toFixed(1)}s)` : '분석불가'}`);
+    console.log(`spoolUp: ${spoolUp ? `${spoolUp.start}~${spoolUp.end.toFixed(1)}s` : 'not analyzable (< 30s)'}`);
+    console.log(`inFlight: ${inFlight ? `${inFlight.start}~${inFlight.end.toFixed(1)}s (${(inFlight.end - inFlight.start).toFixed(1)}s)` : 'not analyzable'}`);
 
-    for (const [name, w] of [['전체', undefined] as const, ['스풀업', spoolUp] as const, ['비행중', inFlight] as const]) {
-      if (name !== '전체' && !w) continue;
+    for (const [name, w] of [['all', undefined] as const, ['spool-up', spoolUp] as const, ['in-flight', inFlight] as const]) {
+      if (name !== 'all' && !w) continue;
       const s = analyzeVibrations(log, { mainRpm: 2300, tailGearRatio: 4.45, motorPinionTeeth: 11, mainGearTeeth: 110, motorKv: 1100, batteryCells: 6, bladeCount: 2 }, w);
       console.log(`[${name}] grade=${s.overallGrade} gyroRms=${s.gyroRms.overall} accRms=${s.accRms.overall} rpm=${s.detectedHeadSpeedRpm} harmonics=${s.harmonics.main1P}/${s.harmonics.main2P}/${s.harmonics.tail1P.toFixed(1)} peaks=${s.peaks.length} diag=${s.diagnostics.length}`);
       for (const p of s.peaks.slice(0, 3)) console.log(`   peak: ${p.axis} ${p.freqHz}Hz amp=${p.amplitude} — ${p.probableSource.slice(0, 60)}`);

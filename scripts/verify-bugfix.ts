@@ -17,24 +17,24 @@ function spectrumOf(sr: number, fftSize: number, comps: Array<[number, number]>)
   return pw;
 }
 
-// 버그 재현 케이스: 79.5Hz 진폭 > 47.3Hz 진폭, 159Hz에 피크 없음 -> 47.3Hz(2838RPM) 선택
+// Bug reproduction case: 79.5Hz amplitude > 47.3Hz amplitude, no peak at 159Hz -> 47.3Hz (2838RPM) must be selected
 {
   const sr = 2000; const N = 1024;
-  // Roll: 47.3Hz(1P, 진폭 3) + 94.6Hz(2P, 진폭 2) + 79.5Hz(공진, 진폭 10)
+  // Roll: 47.3Hz (1P, amplitude 3) + 94.6Hz (2P, amplitude 2) + 79.5Hz (resonance, amplitude 10)
   const roll = spectrumOf(sr, N, [[47.3, 3], [94.6, 2], [79.5, 10]]);
-  // Pitch: 47.3Hz(진폭 2.5) + 94.6Hz(진폭 1.8), 공진은 Roll에만 (검증3: Roll-only 공진 탈락)
+  // Pitch: 47.3Hz (amplitude 2.5) + 94.6Hz (amplitude 1.8); the resonance exists on Roll only (verification 3: Roll-only resonance must be dropped)
   const pitch = spectrumOf(sr, N, [[47.3, 2.5], [94.6, 1.8], [79.5, 1.0]]);
   const single = pickRpmFromSpectrum(roll, sr, N);
   const combined = pickRpmCombined(roll, pitch, sr, N);
-  console.log(`[bugfix] single: peakHz=${single.peakHz?.toFixed(1)} rpm=${single.rpm?.toFixed(0)} (기대 47.3/2838)`);
-  console.log(`[bugfix] combined: peakHz=${combined.peakHz?.toFixed(1)} rpm=${combined.rpm?.toFixed(0)} (기대 47.3/2838)`);
+  console.log(`[bugfix] single: peakHz=${single.peakHz?.toFixed(1)} rpm=${single.rpm?.toFixed(0)} (expected 47.3/2838)`);
+  console.log(`[bugfix] combined: peakHz=${combined.peakHz?.toFixed(1)} rpm=${combined.rpm?.toFixed(0)} (expected 47.3/2838)`);
   const okS = Math.abs(single.rpm - 2838) <= 100;
   const okC = Math.abs(combined.rpm - 2838) <= 100;
-  console.log(`[bugfix] single ${okS ? 'PASS' : 'FAIL'} / combined ${okC ? 'PASS' : 'FAIL'} (79.5 선택이면 버그 미수정)`);
+  console.log(`[bugfix] single ${okS ? 'PASS' : 'FAIL'} / combined ${okC ? 'PASS' : 'FAIL'} (selecting 79.5 means the bug is not fixed)`);
 }
 
-// 엣지 A: 스로틀 0 (모터 정지, 무신호 노이즈 시계열 전체) -> NaN -> 보간/게이트 처리
-// 단일 윈도우가 아니라 실제 파이프라인(시계열 + valid 비율 게이트)으로 판정한다.
+// Edge A: throttle 0 (motor stopped, the whole series is no-signal noise) -> NaN -> interpolation/gate handling
+// The judgment is made through the real pipeline (time series + valid ratio gate), not a single window.
 {
   const srA = 2000; const nA = srA * 10;
   let seed = 7;
@@ -43,16 +43,16 @@ function spectrumOf(sr: number, fftSize: number, comps: Array<[number, number]>)
   for (let i = 0; i < nA; i++) { rA[i] = 0.05 * rnd(); pA[i] = 0.05 * rnd(); }
   const sA = estimateRpmTimeSeries(rA, pA, srA);
   const vA = sA.rpm.filter(x => Number.isFinite(x) && x >= 1200 && x <= 6000);
-  // 노이즈는 윈도우마다 랜덤 주파수에 걸리므로 평활 후에도 분산이 크고,
-  // 실사용에서는 estimateRpmForLogAsync의 valid 비율 게이트에서 탈락한다.
-  // 여기서는 분산 기준으로 판정: std가 평균의 10% 초과면 무신호로 간주 PASS.
+  // Noise lands on random frequencies in every window, so its variance stays large even after smoothing,
+  // and in real use it is dropped by the valid ratio gate in estimateRpmForLogAsync.
+  // Here we judge by variance: a std above 10% of the mean is treated as no-signal and passes.
   const meanA = vA.reduce((a, b) => a + b, 0) / Math.max(1, vA.length);
   const stdA = Math.sqrt(vA.reduce((a, b) => a + (b - meanA) * (b - meanA), 0) / Math.max(1, vA.length));
   const isNoise = vA.length === 0 || (stdA / Math.max(1, meanA)) > 0.10;
-  console.log(`[edgeA] n=${vA.length} mean=${meanA.toFixed(0)} std=${stdA.toFixed(0)} ${isNoise ? 'PASS (무신호 판정)' : 'FAIL'}`);
+  console.log(`[edgeA] n=${vA.length} mean=${meanA.toFixed(0)} std=${stdA.toFixed(0)} ${isNoise ? 'PASS (no-signal)' : 'FAIL'}`);
 }
 
-// 엣지 B: 2P가 1P보다 강한 정상 케이스 (1P 47Hz 진폭2 + 2P 94Hz 진폭6, 양축 동일)
+// Edge B: normal case where 2P is stronger than 1P (1P 47Hz amplitude 2 + 2P 94Hz amplitude 6, identical on both axes)
 {
   const sr = 2000; const n = sr * 10;
   const r = new Float32Array(n); const p = new Float32Array(n);
@@ -64,10 +64,10 @@ function spectrumOf(sr: number, fftSize: number, comps: Array<[number, number]>)
   const s = estimateRpmTimeSeries(r, p, sr);
   const v = s.rpm.filter(x => Number.isFinite(x));
   const a = v.reduce((x, y) => x + y, 0) / Math.max(1, v.length);
-  console.log(`[edgeB] avg=${a.toFixed(1)} expected=2820 ${Math.abs(a - 2820) <= 100 ? 'PASS' : 'FAIL'} (94*60=5640 선택이면 오인)`);
+  console.log(`[edgeB] avg=${a.toFixed(1)} expected=2820 ${Math.abs(a - 2820) <= 100 ? 'PASS' : 'FAIL'} (selecting 94*60=5640 would be a misdetection)`);
 }
 
-// 엣지 C: 고RPM (1P 68Hz = 4080RPM, 범위 내 포함 확인)
+// Edge C: high RPM (1P 68Hz = 4080RPM, confirming it stays inside the search range)
 {
   const sr = 2000; const n = sr * 10;
   const r = new Float32Array(n); const p = new Float32Array(n);
@@ -79,6 +79,6 @@ function spectrumOf(sr: number, fftSize: number, comps: Array<[number, number]>)
   const s = estimateRpmTimeSeries(r, p, sr);
   const v = s.rpm.filter(x => Number.isFinite(x));
   const a = v.reduce((x, y) => x + y, 0) / Math.max(1, v.length);
-  console.log(`[edgeC] avg=${a.toFixed(1)} expected=4080 ${Math.abs(a - 4080) <= 100 ? 'PASS' : 'FAIL'} (범위탈락이면 FAIL)`);
+  console.log(`[edgeC] avg=${a.toFixed(1)} expected=4080 ${Math.abs(a - 4080) <= 100 ? 'PASS' : 'FAIL'} (FAIL if it falls outside the range)`);
 }
 console.log(`range: ${STFT_FREQ_MIN_HZ}~${STFT_FREQ_MAX_HZ}Hz`);

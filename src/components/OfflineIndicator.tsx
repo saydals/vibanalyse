@@ -24,7 +24,7 @@ export const OfflineIndicator: React.FC = () => {
   return (
     <div className="fixed bottom-4 left-4 z-50 flex items-center gap-2 rounded-xl bg-amber-500/95 text-slate-950 px-3.5 py-2 text-xs font-semibold shadow-2xl backdrop-blur-md animate-bounce">
       <WifiOff className="w-4 h-4" />
-      <span>오프라인 모드 — 비행장 현장에서도 인터넷 없이 정상 작동합니다.</span>
+      <span>Offline mode — everything keeps working in the field without an internet connection.</span>
     </div>
   );
 };

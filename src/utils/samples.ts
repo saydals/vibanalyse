@@ -24,10 +24,10 @@ export const REAL_SAMPLES: RealSample[] = [
     file: 'sample.bbl',
     title: 'Sample',
     craft: 'Rotorflight Sample',
-    tag: '기본 샘플',
+    tag: 'Default Sample',
     accent: 'cyan',
-    meta: '기본 제공 샘플 로그',
-    description: '기본 샘플 BBL 파일입니다.',
+    meta: 'Built-in sample log',
+    description: 'Built-in sample BBL file.',
   },
 ];
 
@@ -45,11 +45,11 @@ export async function fetchSampleLogs(sample: RealSample): Promise<BlackboxLog[]
   console.log('[fetchSampleLogs] URL:', url);
   const res = await fetch(url);
   console.log('[fetchSampleLogs] Status:', res.status);
-  if (!res.ok) throw new Error(`샘플 로그 다운로드 실패 (HTTP ${res.status})`);
+  if (!res.ok) throw new Error(`Sample log download failed (HTTP ${res.status})`);
   const buf = await res.arrayBuffer();
   console.log('[fetchSampleLogs] Buffer size:', buf.byteLength);
   const result = await parseBlackboxFile(buf, sample.file);
   console.log('[fetchSampleLogs] Parsed logs:', result.logs.length);
-  if (result.logs.length === 0) throw new Error('샘플 로그에서 유효한 비행 데이터를 찾을 수 없습니다.');
+  if (result.logs.length === 0) throw new Error('No valid flight data found in the sample log.');
   return result.logs;
 }

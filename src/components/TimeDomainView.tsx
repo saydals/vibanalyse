@@ -25,9 +25,9 @@ export const TimeDomainView: React.FC<TimeDomainViewProps> = ({
   const isDraggingEnd = useRef(false);
   const isScrubbing = useRef(false);
 
-  // 타임라인은 자이로만 표시
+  // Timeline draws gyro channels only
 
-  // Downsample for ultra-fast 60fps canvas rendering (자이로만)
+  // Downsample for ultra-fast 60fps canvas rendering (gyro only)
   const downsampledData = useMemo(() => {
     const targetPoints = 800;
     const total = log.time.length;
@@ -113,7 +113,7 @@ export const TimeDomainView: React.FC<TimeDomainViewProps> = ({
     ctx.lineTo(padLeft + plotW, zeroY);
     ctx.stroke();
 
-    // Draw signals (자이로만)
+    // Draw signals (gyro only)
     const { times, r, p, y, count } = downsampledData;
 
     const drawLine = (data: Float32Array, color: string, scale: number, yOffset: number = zeroY) => {
@@ -130,7 +130,7 @@ export const TimeDomainView: React.FC<TimeDomainViewProps> = ({
       ctx.stroke();
     };
 
-    // Draw signals (자이로만)
+    // Draw signals (gyro only)
     const gyroScale = plotH / 180; // +/- 90 deg/s range
     drawLine(r, '#38bdf8', gyroScale);
     drawLine(p, '#f59e0b', gyroScale);
@@ -182,7 +182,7 @@ export const TimeDomainView: React.FC<TimeDomainViewProps> = ({
     } else if (Math.abs(x - selEndX) < 14) {
       isDraggingEnd.current = true;
     } else {
-      // Scrub time (1초 단위로 스냅)
+      // Scrub time (snap to whole seconds)
       isScrubbing.current = true;
       const clickedTime = Math.max(0, Math.min(dur, Math.round(((x - padLeft) / plotW) * dur)));
       onTimeChange(clickedTime);
@@ -238,7 +238,7 @@ export const TimeDomainView: React.FC<TimeDomainViewProps> = ({
         <div className="flex items-center gap-2">
           <div>
             <h3 className={`text-sm font-semibold ${isDark ? 'text-white' : 'text-slate-900'}`}>
-              비행 타임라인 & FFT 분석 구간 선택
+              Flight Timeline & FFT Analysis Window
             </h3>
           </div>
         </div>

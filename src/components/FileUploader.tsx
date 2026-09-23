@@ -32,12 +32,12 @@ export const FileUploader: React.FC<FileUploaderProps> = ({
     try {
       const result = await parseBlackboxFile(file, file.name);
       if (result.logs.length === 0) {
-        throw new Error('파일에서 유효한 블랙박스 비행 로그를 찾을 수 없습니다.');
+        throw new Error('No valid blackbox flight log found in the file.');
       }
       onLogLoaded(result.logs, file.name);
     } catch (err: any) {
       console.error(err);
-      setErrorMessage(err.message || '파일을 분석하는 중 오류가 발생했습니다. 올바른 .BBL 또는 .CSV 파일인지 확인해주세요.');
+      setErrorMessage(err.message || 'Something went wrong while analyzing the file. Please check that it is a valid .BBL or .CSV file.');
     } finally {
       setIsLoading(false);
     }
@@ -51,7 +51,7 @@ export const FileUploader: React.FC<FileUploaderProps> = ({
       onLogLoaded(logs, sample.file);
     } catch (err: any) {
       console.error(err);
-      setErrorMessage(err?.message || '샘플 로그를 불러오는 중 오류가 발생했습니다.');
+      setErrorMessage(err?.message || 'Something went wrong while loading the sample log.');
     } finally {
       setIsLoading(false);
     }
@@ -69,14 +69,14 @@ export const FileUploader: React.FC<FileUploaderProps> = ({
       >
         <div className="flex items-center gap-2">
           <span className="font-bold px-2 py-0.5 rounded bg-cyan-600 text-white text-[11px]">
-            ROTORFLIGHT 전용 판별
+            ROTORFLIGHT ONLY
           </span>
           <span className="leading-snug">
-            BBL 헤더에 대소문자 구분 없이 <strong>&apos;rotorflight&apos;</strong>가 포함되어 있을 때 Rotorflight BBL로 자동 인정됩니다.
+            A BBL is accepted as a Rotorflight log when its header contains <strong>&apos;rotorflight&apos;</strong> (case-insensitive).
           </span>
         </div>
         <span className={isDark ? 'text-cyan-400' : 'text-cyan-700'}>
-          (멀티로터 드론/Betaflight 등 비-Rotorflight 파일은 자동 차단)
+          (multirotor drone / Betaflight and other non-Rotorflight files are rejected automatically)
         </span>
       </div>
 
@@ -121,10 +121,10 @@ export const FileUploader: React.FC<FileUploaderProps> = ({
 
         <div>
           <h2 className={`text-lg font-bold ${isDark ? 'text-white' : 'text-slate-900'}`}>
-            로터플라이트 블랙박스 로그 (.BBL / .CSV) 파일 선택 또는 드래그
+            Choose or drag a Rotorflight blackbox log (.BBL / .CSV)
           </h2>
           <p className={`text-xs mt-1 max-w-md mx-auto ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
-            MicroSD 카드(LOGS/LOG00001.BBL) 또는 Rotorflight Configurator에서 다운로드한 파일을 바로 열어 진동을 분석합니다.
+            Open a file from a MicroSD card (LOGS/LOG00001.BBL) or downloaded with the Rotorflight Configurator and analyze its vibration immediately.
           </p>
         </div>
 
@@ -136,7 +136,7 @@ export const FileUploader: React.FC<FileUploaderProps> = ({
                 : 'bg-slate-100 text-slate-700 border-slate-200'
             }`}
           >
-            .BBL 바이너리 로그
+            .BBL binary log
           </span>
           <span
             className={`px-2.5 py-1 rounded-full text-xs font-mono font-medium border ${
@@ -145,7 +145,7 @@ export const FileUploader: React.FC<FileUploaderProps> = ({
                 : 'bg-slate-100 text-slate-700 border-slate-200'
             }`}
           >
-            .CSV 변환 텍스트
+            .CSV exported text
           </span>
         </div>
 
@@ -156,7 +156,7 @@ export const FileUploader: React.FC<FileUploaderProps> = ({
             }`}
           >
             <span className="w-5 h-5 border-2 border-cyan-500 border-t-transparent rounded-full animate-spin"></span>
-            <span>블랙박스 데이터 파싱 및 고속 FFT 연산 중...</span>
+            <span>Parsing blackbox data and running the fast FFT analysis...</span>
           </div>
         )}
       </div>
@@ -183,7 +183,7 @@ export const FileUploader: React.FC<FileUploaderProps> = ({
           <div className="flex items-center gap-2">
             <Sparkles className="w-4 h-4 text-amber-500" />
             <h3 className={`text-sm font-semibold ${isDark ? 'text-white' : 'text-slate-900'}`}>
-              샘플 로그 불러오기
+              Load a sample log
             </h3>
           </div>
         </div>
@@ -242,7 +242,7 @@ export const FileUploader: React.FC<FileUploaderProps> = ({
                   </p>
                 </div>
                 <span className={`text-xs font-semibold flex items-center gap-1 ${a.cta}`}>
-                  <span>샘플 불러오기</span> →
+                  <span>Load sample</span> →
                 </span>
               </button>
             );
@@ -259,12 +259,12 @@ export const FileUploader: React.FC<FileUploaderProps> = ({
         <HardDrive className="w-5 h-5 text-cyan-500 shrink-0 mt-0.5" />
         <div className="space-y-1">
           <p className={`font-semibold ${isDark ? 'text-slate-200' : 'text-slate-800'}`}>
-            💡 로터플라이트(Rotorflight) 블랙박스 파일 추출 팁
+            💡 Tips for extracting Rotorflight blackbox files
           </p>
           <p className="leading-relaxed">
-            - 온보드 SD 카드 장착 FC: FC에서 MicroSD 카드를 꺼내 스마트폰 OTG 리더기나 PC에 연결 후 <code>LOGS/LOG0000X.BBL</code> 파일을 직접 선택하세요.
+            - FC with onboard SD card: take the MicroSD card out of the FC and connect it to a phone OTG reader or a PC, then select the <code>LOGS/LOG0000X.BBL</code> file directly.
             <br />
-            - 온보드 플래시 메모리 FC: Rotorflight Configurator 연결 후 '블랙박스' 탭에서 '로그 파일로 저장'을 클릭하여 저장된 .BBL 파일을 불러옵니다.
+            - FC with onboard flash memory: connect the Rotorflight Configurator, open the 'Blackbox' tab, click 'Save to file' and load the saved .BBL file.
           </p>
         </div>
       </div>

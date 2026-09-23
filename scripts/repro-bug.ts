@@ -49,7 +49,7 @@ async function main() {
                  resultA.accRms.overall === resultB.accRms.overall &&
                  resultA.detectedHeadSpeedRpm === resultB.detectedHeadSpeedRpm &&
                  resultA.peaks.length === resultB.peaks.length;
-  console.log(`두 패턴 결과 일치: ${matchA ? '✅ PASS' : '❌ FAIL'}`);
+  console.log(`Both patterns agree: ${matchA ? '✅ PASS' : '❌ FAIL'}`);
 
   if (resultA.gyroRms.overall === 0 && resultA.accRms.overall === 0) {
     console.log('❌ BUG STILL PRESENT: All vibration values are 0!');

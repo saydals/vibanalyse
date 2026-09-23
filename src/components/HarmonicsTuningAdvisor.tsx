@@ -95,10 +95,10 @@ save`;
           </div>
           <div>
             <h3 className={`text-base font-semibold ${isDark ? 'text-white' : 'text-slate-900'}`}>
-              기체 기어비 & RPM 고조파 계산기 (Harmonic Calculator)
+              Airframe Gear Ratio & RPM Harmonic Calculator
             </h3>
             <p className={`text-xs ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
-              헬리콥터 기어비 및 로터 회전수에 따른 주파수를 자동 계산하여 Rotorflight 필터 최적값을 생성합니다.
+              Automatically calculates frequencies from the helicopter gear ratio and rotor speed and generates optimal Rotorflight filter values.
             </p>
           </div>
         </div>
@@ -113,7 +113,7 @@ save`;
             }`}
           >
             <Zap className={`w-3.5 h-3.5 ${isDark ? 'text-cyan-400' : 'text-cyan-600'}`} />
-            <span>블랙박스 감지 RPM ({Math.round(detectedRpm)} RPM) 적용</span>
+            <span>Apply the RPM detected in the blackbox ({Math.round(detectedRpm)} RPM)</span>
           </button>
         )}
       </div>
@@ -124,7 +124,7 @@ save`;
         <div className={`p-3 rounded-xl border flex flex-col gap-1.5 ${
           isDark ? 'bg-slate-950/60 border-slate-800' : 'bg-slate-50 border-slate-200'
         }`}>
-          <label className={`text-xs font-medium ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>헤드스피드 (RPM)</label>
+          <label className={`text-xs font-medium ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>Head speed (RPM)</label>
           <input
             type="number"
             value={config.mainRpm}
@@ -142,7 +142,7 @@ save`;
         <div className={`p-3 rounded-xl border flex flex-col gap-1.5 ${
           isDark ? 'bg-slate-950/60 border-slate-800' : 'bg-slate-50 border-slate-200'
         }`}>
-          <label className={`text-xs font-medium ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>테일 기어비 (Tail Ratio)</label>
+          <label className={`text-xs font-medium ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>Tail gear ratio</label>
           <input
             type="number"
             value={config.tailGearRatio}
@@ -160,7 +160,7 @@ save`;
         <div className={`p-3 rounded-xl border flex flex-col gap-1.5 ${
           isDark ? 'bg-slate-950/60 border-slate-800' : 'bg-slate-50 border-slate-200'
         }`}>
-          <label className={`text-xs font-medium ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>메인 / 피니언 기어비</label>
+          <label className={`text-xs font-medium ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>Main / pinion gear ratio</label>
           <div className="flex items-center gap-1">
             <input
               type="number"
@@ -169,7 +169,7 @@ save`;
               className={`w-1/2 border rounded-lg px-2 py-1.5 text-xs font-mono text-center focus:outline-none focus:border-cyan-500 ${
                 isDark ? 'bg-slate-900 border-slate-700 text-white' : 'bg-white border-slate-300 text-slate-900'
               }`}
-              title="메인 기어 잇수 (Main Teeth)"
+              title="Main gear teeth"
             />
             <span className={isDark ? 'text-slate-500' : 'text-slate-400'}>:</span>
             <input
@@ -179,7 +179,7 @@ save`;
               className={`w-1/2 border rounded-lg px-2 py-1.5 text-xs font-mono text-center focus:outline-none focus:border-cyan-500 ${
                 isDark ? 'bg-slate-900 border-slate-700 text-white' : 'bg-white border-slate-300 text-slate-900'
               }`}
-              title="피니언 기어 잇수 (Pinion Teeth)"
+              title="Pinion gear teeth"
             />
           </div>
         </div>
@@ -188,7 +188,7 @@ save`;
         <div className={`p-3 rounded-xl border flex flex-col gap-1.5 ${
           isDark ? 'bg-slate-950/60 border-slate-800' : 'bg-slate-50 border-slate-200'
         }`}>
-          <label className={`text-xs font-medium ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>메인 블레이드 수</label>
+          <label className={`text-xs font-medium ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>Main blade count</label>
           <select
             value={config.bladeCount}
             onChange={e => onConfigChange({ ...config, bladeCount: Number(e.target.value) })}
@@ -196,9 +196,9 @@ save`;
               isDark ? 'bg-slate-900 border-slate-700 text-white' : 'bg-white border-slate-300 text-slate-900'
             }`}
           >
-            <option value="2">2-블레이드 (일반 FBL)</option>
-            <option value="3">3-블레이드 (트라이블레이드)</option>
-            <option value="4">4-블레이드 (스케일 헤드)</option>
+            <option value="2">2-blade (typical FBL)</option>
+            <option value="3">3-blade (tri-blade)</option>
+            <option value="4">4-blade (scale head)</option>
           </select>
         </div>
       </div>
@@ -208,45 +208,45 @@ save`;
         <div className={`p-3 rounded-xl border flex flex-col justify-between ${
           isDark ? 'bg-blue-950/20 border-blue-800/40' : 'bg-blue-50/70 border-blue-200'
         }`}>
-          <span className={`text-xs font-medium ${isDark ? 'text-blue-300' : 'text-blue-800'}`}>1P 메인 로터</span>
+          <span className={`text-xs font-medium ${isDark ? 'text-blue-300' : 'text-blue-800'}`}>1P main rotor</span>
           <div className="mt-1 flex items-baseline justify-between">
             <span className={`text-xl font-bold font-mono ${isDark ? 'text-blue-400' : 'text-blue-600'}`}>{main1P.toFixed(1)} Hz</span>
             <span className={`text-[10px] ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>1x Head RPM</span>
           </div>
-          <span className={`text-[11px] mt-1 ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>블레이드 밸런스 / 스핀들 축</span>
+          <span className={`text-[11px] mt-1 ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>Blade balance / spindle shaft</span>
         </div>
 
         <div className={`p-3 rounded-xl border flex flex-col justify-between ${
           isDark ? 'bg-purple-950/20 border-purple-800/40' : 'bg-purple-50/70 border-purple-200'
         }`}>
-          <span className={`text-xs font-medium ${isDark ? 'text-purple-300' : 'text-purple-800'}`}>{config.bladeCount}P 블레이드 통과</span>
+          <span className={`text-xs font-medium ${isDark ? 'text-purple-300' : 'text-purple-800'}`}>{config.bladeCount}P blade passage</span>
           <div className="mt-1 flex items-baseline justify-between">
             <span className={`text-xl font-bold font-mono ${isDark ? 'text-purple-400' : 'text-purple-600'}`}>{main2P.toFixed(1)} Hz</span>
             <span className={`text-[10px] ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>{config.bladeCount}x Head RPM</span>
           </div>
-          <span className={`text-[11px] mt-1 ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>트래킹 차이 / 피치 로드</span>
+          <span className={`text-[11px] mt-1 ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>Tracking difference / pitch rod</span>
         </div>
 
         <div className={`p-3 rounded-xl border flex flex-col justify-between ${
           isDark ? 'bg-amber-950/20 border-amber-800/40' : 'bg-amber-50/70 border-amber-200'
         }`}>
-          <span className={`text-xs font-medium ${isDark ? 'text-amber-300' : 'text-amber-800'}`}>테일 로터 1P</span>
+          <span className={`text-xs font-medium ${isDark ? 'text-amber-300' : 'text-amber-800'}`}>Tail rotor 1P</span>
           <div className="mt-1 flex items-baseline justify-between">
             <span className={`text-xl font-bold font-mono ${isDark ? 'text-amber-400' : 'text-amber-600'}`}>{tail1P.toFixed(1)} Hz</span>
             <span className={`text-[10px] ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>{config.tailGearRatio}x Ratio</span>
           </div>
-          <span className={`text-[11px] mt-1 ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>테일 밸런스 / 벨트 장력</span>
+          <span className={`text-[11px] mt-1 ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>Tail balance / belt tension</span>
         </div>
 
         <div className={`p-3 rounded-xl border flex flex-col justify-between ${
           isDark ? 'bg-pink-950/20 border-pink-800/40' : 'bg-pink-50/70 border-pink-200'
         }`}>
-          <span className={`text-xs font-medium ${isDark ? 'text-pink-300' : 'text-pink-800'}`}>모터 전기/샤프트 1P</span>
+          <span className={`text-xs font-medium ${isDark ? 'text-pink-300' : 'text-pink-800'}`}>Motor electrical / shaft 1P</span>
           <div className="mt-1 flex items-baseline justify-between">
             <span className={`text-xl font-bold font-mono ${isDark ? 'text-pink-400' : 'text-pink-600'}`}>{motor1P.toFixed(1)} Hz</span>
-            <span className={`text-[10px] ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>비 {gearRatio.toFixed(2)}:1</span>
+            <span className={`text-[10px] ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>Ratio {gearRatio.toFixed(2)}:1</span>
           </div>
-          <span className={`text-[11px] mt-1 ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>모터 베어링 / 백래시</span>
+          <span className={`text-[11px] mt-1 ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>Motor bearings / backlash</span>
         </div>
       </div>
 
@@ -257,14 +257,14 @@ save`;
         <div className="flex items-center justify-between">
           <span className={`text-xs font-semibold flex items-center gap-1.5 ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>
             <Sliders className={`w-3.5 h-3.5 ${isDark ? 'text-cyan-400' : 'text-cyan-600'}`} />
-            <span>Rotorflight CLI 설정 코드 (복사하여 CLI 탭에 붙여넣기)</span>
+            <span>Rotorflight CLI settings (copy and paste into the CLI tab)</span>
           </span>
           <button
             onClick={copyToClipboard}
             className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-cyan-500 hover:bg-cyan-400 text-slate-950 text-xs font-bold transition shadow-xs cursor-pointer"
           >
             {copied ? <Check className="w-3.5 h-3.5 text-slate-950" /> : <Copy className="w-3.5 h-3.5 text-slate-950" />}
-            <span>{copied ? '복사 완료!' : 'CLI 복사'}</span>
+            <span>{copied ? 'Copied!' : 'Copy CLI'}</span>
           </button>
         </div>
 

@@ -11,7 +11,7 @@ export interface ParseResult {
   primaryLogIndex: number;
 }
 
-// FFT 분석에 필요한 최소 연속 구간(초). 이보다 짧은 구간은 분석하지 않는다.
+// Minimum continuous window (seconds) required for FFT analysis. Shorter windows are not analyzed.
 export const MIN_ANALYSIS_SEC = 30;
 
 // Field predictors (blackbox_fielddefs.h / flightlog_parser.js)
@@ -457,7 +457,7 @@ function countSkipped(last: number, sys: SysConfig): number {
  * Check if the log is a valid Rotorflight helicopter blackbox log.
  * 
  * User requirement:
- * "multirotor 드론 때문에 구분이 안감. rotorflight 대소문자 구분하지 않고 bbl 헤더에 있을때 rotorflight bbl로 인정"
+ * "Multirotor drone logs cannot be told apart. Accept it as a Rotorflight BBL when 'rotorflight' appears in the BBL header, case-insensitive."
  * 
  * When "rotorflight" (case-insensitive) is present anywhere in the BBL header:
  * It is recognized as a Rotorflight BBL!
@@ -548,20 +548,20 @@ export function validateRotorflightLog(
     // Recognized as Rotorflight BBL
   } else {
     // Rejected: Non-Rotorflight (Multirotor Drone / Betaflight / etc.)
-    reasons.push('BBL 헤더에 "rotorflight" (대소문자 무관) 식별자가 존재하지 않습니다.');
+    reasons.push('The BBL header does not contain a "rotorflight" identifier (case-insensitive).');
     if (firmwareHeader) {
-      reasons.push(`감지된 펌웨어 헤더: "${firmwareHeader}" (멀티로터 드론/Betaflight 등)`);
+      reasons.push(`Detected firmware header: "${firmwareHeader}" (multirotor drone / Betaflight, etc.)`);
     } else {
-      reasons.push('멀티로터 드론 또는 비-Rotorflight 블랙박스 파일로 식별되었습니다.');
+      reasons.push('Identified as a multirotor drone or a non-Rotorflight blackbox file.');
     }
     if (motorCount >= 3) {
-      reasons.push(`모터가 ${motorCount}개 감지되었습니다. (멀티로터 쿼드콥터 드론)`);
+      reasons.push(`${motorCount} motors detected. (multirotor quadcopter drone)`);
     }
     if (!hasServos) {
-      reasons.push('스와시플레이트 서보(Servo) 항목이 감지되지 않았습니다.');
+      reasons.push('No swashplate servo entries were detected.');
     }
     if (!hasCollective) {
-      reasons.push('COLLECTIVE(콜렉티브 피치) 제어 항목이 감지되지 않았습니다.');
+      reasons.push('No COLLECTIVE (collective pitch) control entry was detected.');
     }
   }
 
@@ -627,7 +627,7 @@ export async function parseBlackboxFile(file: File | ArrayBuffer, fileName: stri
     if (textResult) return textResult;
     const binaryResult = parseAsBinary();
     if (binaryResult) return binaryResult;
-    throw new Error('블랙박스 데이터 프레임을 찾을 수 없습니다. 올바른 Rotorflight .BBL 또는 .CSV 파일인지 확인해주세요.');
+    throw new Error('No blackbox data frames found. Please check that it is a valid Rotorflight .BBL or .CSV file.');
   }
 
   // Binary .BBL first (real flight recorder logs), text export fallback
@@ -635,7 +635,7 @@ export async function parseBlackboxFile(file: File | ArrayBuffer, fileName: stri
   if (binaryResult) return binaryResult;
   const textResult = parseAsText();
   if (textResult) return textResult;
-  throw new Error('블랙박스 데이터 프레임을 찾을 수 없습니다. 올바른 Rotorflight .BBL 또는 .CSV 파일인지 확인해주세요.');
+  throw new Error('No blackbox data frames found. Please check that it is a valid Rotorflight .BBL or .CSV file.');
 }
 
 /** Legacy text sniff kept for reference (no longer used for routing). */
@@ -674,7 +674,7 @@ export function parseCsvOrTextLog(text: string, fileName: string): BlackboxLog[]
     dataStartIndex = i + 1;
     break;
   }
-  if (headerLines.length === 0) throw new Error('CSV 헤더를 찾을 수 없습니다.');
+  if (headerLines.length === 0) throw new Error('CSV header not found.');
   const findCol = (...cands: string[]): number => {
     for (const c of cands) {
       const ix = headerLines.findIndex(h => h.toLowerCase() === c.toLowerCase());
@@ -696,7 +696,7 @@ export function parseCsvOrTextLog(text: string, fileName: string): BlackboxLog[]
   const rawYawIdx = findCol('gyroRAW[2]');
   const hasGyroFilteredField = rollIdx >= 0 || pitchIdx >= 0 || yawIdx >= 0;
   const hasGyroRawField = rawRollIdx >= 0 || rawPitchIdx >= 0 || rawYawIdx >= 0;
-  // gyroADC 컬럼이 없는 CSV는 gyroRAW 컬럼으로 대체 → 최소 1개 소스는 제공
+  // A CSV without gyroADC columns falls back to the gyroRAW columns → at least one source is always provided
   const effRollIdx = hasGyroFilteredField ? rollIdx : rawRollIdx;
   const effPitchIdx = hasGyroFilteredField ? pitchIdx : rawPitchIdx;
   const effYawIdx = hasGyroFilteredField ? yawIdx : rawYawIdx;
@@ -757,7 +757,7 @@ export function parseCsvOrTextLog(text: string, fileName: string): BlackboxLog[]
     if (thrIdx >= 0) thrA.push(num(thrIdx));
     if (collIdx >= 0) collA.push(num(collIdx));
   }
-  if (time.length < 100) throw new Error(`유효한 데이터 행이 부족합니다. (${time.length}행)`);
+  if (time.length < 100) throw new Error(`Not enough valid data rows. (${time.length} rows)`);
   const t0 = time[0];
   for (let i = 0; i < time.length; i++) time[i] -= t0;
   const dts: number[] = [];
@@ -908,7 +908,7 @@ export function parseBinaryBbl(bytes: Uint8Array, fileName: string): BlackboxLog
     } catch (e) { console.warn(`BBL log #${li + 1} parse failed:`, e); continue; }
   }
   if (logs.length === 0) {
-    throw new Error('BBL 파일에서 유효한 비행 로그를 찾을 수 없습니다. Rotorflight 블랙박스 파일(.BBL)이 맞는지 확인해주세요.');
+    throw new Error('No valid flight log found in the BBL file. Please check that it is a Rotorflight blackbox file (.BBL).');
   }
   logs.forEach((l, i) => { l.id = i + 1; });
   return logs;
@@ -916,7 +916,7 @@ export function parseBinaryBbl(bytes: Uint8Array, fileName: string): BlackboxLog
 interface MainSample {
   timeUs: number; iteration: number;
   gyro: [number, number, number]; acc: [number, number, number];
-  /** gyroRAW (미필터) — 해당 필드가 없으면 null */
+  /** gyroRAW (unfiltered) — null when the field is absent */
   gyroRaw: [number, number, number] | null;
   headspeed: number; tailspeed: number; motor: number;
   vbat: number; amperage: number; throttle: number;
@@ -925,9 +925,9 @@ interface ParsedLogData {
   headers: Record<string, string>; sysConfig: SysConfig;
   frameDefs: Record<string, FrameDef>; samples: MainSample[];
   events: { timeUs: number; name: string; data?: string }[];
-  /** gyroADC[n] (필터 통과) 필드가 BBL에 기록되어 있는지 */
+  /** Whether the gyroADC[n] (filtered) field is logged in the BBL */
   hasGyroFilteredField: boolean;
-  /** gyroRAW[n] (미필터) 필드가 BBL에 기록되어 있는지 */
+  /** Whether the gyroRAW[n] (unfiltered) field is logged in the BBL */
   hasGyroRawField: boolean;
 }
 
@@ -1032,15 +1032,15 @@ function parseSingleBinaryLog(bytes: Uint8Array, logStart: number, logEnd: numbe
   let defI = frameDefs.I;
   let defP = frameDefs.P;
   if (!defI || defI.count === 0 || defI.predictor.length !== defI.count || defI.encoding.length !== defI.count) {
-    throw new Error('I 프레임 정의가 없어 로그 헤더가 손상되었습니다.');
+    throw new Error('The log header is corrupted: no I-frame definition.');
   }
-  if (!defP) throw new Error('P 프레임 정의가 없어 로그 헤더가 손상되었습니다.');
+  if (!defP) throw new Error('The log header is corrupted: no P-frame definition.');
   defP = frameDefs.P = {
     name: defI.name, nameToIndex: defI.nameToIndex, count: defI.count,
     signed: defI.signed, predictor: defP.predictor, encoding: defP.encoding,
   };
   if (defP.predictor.length !== defP.count || defP.encoding.length !== defP.count) {
-    throw new Error('P 프레임 정의가 불완전합니다.');
+    throw new Error('The P-frame definition is incomplete.');
   }
   defI = frameDefs.I;
   const defG = frameDefs.G;
@@ -1066,10 +1066,10 @@ function parseSingleBinaryLog(bytes: Uint8Array, logStart: number, logEnd: numbe
   const fidx = (n: string): number => defI.nameToIndex[n] ?? -1;
   const iGyroF = [fidx('gyroADC[0]'), fidx('gyroADC[1]'), fidx('gyroADC[2]')];
   const iGyroR = [fidx('gyroRAW[0]'), fidx('gyroRAW[1]'), fidx('gyroRAW[2]')];
-  // Rotorflight: gyroADC = gyroADCf (자이로 필터 통과), gyroRAW = gyroADCd (필터 전 raw)
+  // Rotorflight: gyroADC = gyroADCf (after the gyro filters), gyroRAW = gyroADCd (raw before the filters)
   const hasGyroFilteredField = iGyroF[0] >= 0;
   const hasGyroRawField = iGyroR[0] >= 0;
-  // gyroADC 필드가 없는 로그(일부 구버전/디버그 설정)는 gyroRAW로 대체 → 최소 1개 소스는 제공
+  // Logs without the gyroADC field (some older / debug configurations) fall back to gyroRAW → at least one source is always provided
   const iGyro = hasGyroFilteredField ? iGyroF : iGyroR;
   const iAcc = [fidx('accSmooth[0]'), fidx('accSmooth[1]'), fidx('accSmooth[2]')];
   const iAccAlt = [fidx('accADC[0]'), fidx('accADC[1]'), fidx('accADC[2]')];
@@ -1365,16 +1365,16 @@ export function analyzeVibrations(
   if (overallGrade === 'EXCELLENT') {
     diagnostics.push({
       type: 'success',
-      title: '기체 기계적 상태 최상 (Clean Mechanics)',
-      description: `자이로 노이즈 RMS(${overallGyroRms.toFixed(1)}°/s) 및 가속도 진동(${overallAccRms.toFixed(2)}G)이 매우 낮습니다. Rotorflight 자이로 필터 지연(D-term lag)을 최소화하여 조종 응답성을 극대화할 수 있습니다.`,
-      action: 'D-term 저역통과 필터(LPF) 차단주파수를 높여 반응성 튜닝 추천',
+      title: 'Airframe Mechanical Condition Excellent (Clean Mechanics)',
+      description: `Gyro noise RMS (${overallGyroRms.toFixed(1)}°/s) and accelerometer vibration (${overallAccRms.toFixed(2)}G) are very low. You can minimize the Rotorflight gyro filter delay (D-term lag) to maximize control response.`,
+      action: 'Recommended tuning: raise the D-term low-pass filter (LPF) cutoff frequency for better responsiveness',
     });
   } else if (overallGrade === 'WARNING' || overallGrade === 'CRITICAL') {
     diagnostics.push({
       type: 'error',
-      title: '과도한 진동 감지 (High Vibration Alert)',
-      description: `평균 자이로 진동이 ${overallGyroRms.toFixed(1)}°/s로 주의 기준치를 초과했습니다. 비행 중 자이로 오동작 및 모터/서보 발열의 원인이 됩니다.`,
-      action: '하단의 주파수 피크와 고조파(Harmonics)를 대조하여 기계적 원인을 점검하세요.',
+      title: 'Excessive Vibration Detected (High Vibration Alert)',
+      description: `Average gyro vibration is ${overallGyroRms.toFixed(1)}°/s, which exceeds the warning threshold. It causes gyro misbehavior in flight and overheating of the motor/servos.`,
+      action: 'Compare the frequency peaks and harmonics below to track down the mechanical cause.',
     });
   }
 
@@ -1383,9 +1383,9 @@ export function analyzeVibrations(
   if (tailPeak && tailPeak.amplitude > 8) {
     diagnostics.push({
       type: 'warning',
-      title: `테일 로터 1P 고주파 진동 검출 (${tailPeak.freqHz} Hz)`,
-      description: `헤드스피드 ${detectedHeadSpeedRpm} RPM 기준 테일 기어비(${tailRatio}:1)에 해당하는 약 ${Math.round(tail1P)} Hz 영역에서 강한 요(Yaw) 진동이 감지되었습니다.`,
-      action: '1) 테일 블레이드 무게 밸런싱 2) 테일 샤프트 휨 3) 테일 벨트/토크튜브 장력 점검 4) Rotorflight RPM 하모닉 노치 필터 활성화',
+      title: `Tail Rotor 1P High-Frequency Vibration Detected (${tailPeak.freqHz} Hz)`,
+      description: `Strong yaw vibration was detected around ${Math.round(tail1P)} Hz, which corresponds to the tail gear ratio (${tailRatio}:1) at a head speed of ${detectedHeadSpeedRpm} RPM.`,
+      action: '1) Balance the tail blade weights 2) check for a bent tail shaft 3) check the tail belt / torque tube tension 4) enable the Rotorflight RPM harmonic notch filter',
     });
   }
 
@@ -1393,9 +1393,9 @@ export function analyzeVibrations(
   if (main1PPeak && main1PPeak.amplitude > 6) {
     diagnostics.push({
       type: 'warning',
-      title: `메인 로터 1P 저주파 진동 검출 (${main1PPeak.freqHz} Hz)`,
-      description: `메인 로터 회전 주파수(~${Math.round(main1P)} Hz)와 일치하는 피크입니다. 주로 메인 블레이드 무게 불균형이나 패더링 스핀들 샤프트의 휨에 의해 발생합니다.`,
-      action: '메인 블레이드 무게 중심(CG) 및 무게 일치 확인, 스핀들 샤프트 롤러 점검',
+      title: `Main Rotor 1P Low-Frequency Vibration Detected (${main1PPeak.freqHz} Hz)`,
+      description: `This peak matches the main rotor rotation frequency (~${Math.round(main1P)} Hz). It is usually caused by unbalanced main blade weight or a bent feathering spindle shaft.`,
+      action: 'Check the main blade center of gravity (CG) and blade weight match, inspect the spindle shaft bearings',
     });
   }
 
@@ -1403,17 +1403,17 @@ export function analyzeVibrations(
   if (main2PPeak && main2PPeak.amplitude > 8) {
     diagnostics.push({
       type: 'info',
-      title: `메인 로터 2P 블레이드 트래킹 진동 (${main2PPeak.freqHz} Hz)`,
-      description: `블레이드 2개가 번갈아 통과할 때 발생하는 양력 불균형(트래킹 오차)입니다.`,
-      action: '호버링 시 블레이드 트래킹 선 일치 여부 확인 및 턴버클 피치로드 미세 조정',
+      title: `Main Rotor 2P Blade Tracking Vibration (${main2PPeak.freqHz} Hz)`,
+      description: `Lift imbalance caused by the two blades passing alternately (tracking error).`,
+      action: 'While hovering, check that both blades track in the same plane and fine-tune the turnbuckle pitch links',
     });
   }
 
   // Add Rotorflight filter advice
   diagnostics.push({
     type: 'info',
-    title: 'Rotorflight 노치 필터 추천 가이드',
-    description: `권장 동적 노치(Dynamic Notch) 설정: Min Freq ${Math.round(main1P * 0.9)} Hz, Max Freq ${Math.round(tail1P * 1.5)} Hz, Q=300. RPM 필터 활성화 시 테일 1P(${Math.round(tail1P)} Hz)를 자동 추적합니다.`,
+    title: 'Rotorflight Notch Filter Recommendation Guide',
+    description: `Recommended dynamic notch settings: Min Freq ${Math.round(main1P * 0.9)} Hz, Max Freq ${Math.round(tail1P * 1.5)} Hz, Q=300. With the RPM filter enabled it tracks tail 1P (${Math.round(tail1P)} Hz) automatically.`,
   });
 
   return {
