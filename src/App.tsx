@@ -1,19 +1,16 @@
-import React, { useState, useMemo, useEffect, useCallback } from 'react';
-import { BlackboxLog, HeliConfig, VibrationSummary, FftResult } from './types/blackbox';
+import React, { useState, useMemo, useEffect, useCallback, useRef } from 'react';
+import { BlackboxLog, HeliConfig, FftResult } from './types/blackbox';
 import { Header } from './components/Header';
-import { FileUploader } from './components/FileUploader';
-import { VibrationOverview } from './components/VibrationOverview';
 import { FftSpectrumView } from './components/FftSpectrumView';
 import { TimeDomainView } from './components/TimeDomainView';
-import { HarmonicsTuningAdvisor } from './components/HarmonicsTuningAdvisor';
 import { NonRotorflightNotice } from './components/NonRotorflightNotice';
 import { OfflineIndicator } from './components/OfflineIndicator';
 import { DEFAULT_SAMPLE, REAL_SAMPLES, fetchSampleLogs } from './utils/samples';
 import { computeMultiAxisFft } from './utils/fft';
-import { analyzeVibrations, MIN_ANALYSIS_SEC } from './utils/blackboxParser';
+import { MIN_ANALYSIS_SEC, parseBlackboxFile } from './utils/blackboxParser';
 import { estimateRpmForLogAsync, getRpmForSelection } from './utils/rpmEstimator';
 import { useTheme } from './context/ThemeContext';
-import { UploadCloud, ShieldAlert, Sparkles, Loader2 } from 'lucide-react';
+import { Loader2 } from 'lucide-react';
 
 function emptyFftResult(): FftResult {
   return {
@@ -36,10 +33,11 @@ export default function App() {
   const [sampleError, setSampleError] = useState<string | null>(null);
   const [currentLogIndex, setCurrentLogIndex] = useState<number>(0);
   const [isLoading, setIsLoading] = useState<boolean>(false);
-  const [showUploaderModal, setShowUploaderModal] = useState<boolean>(false);
+  const [fileError, setFileError] = useState<string | null>(null);
   const [maxFreqRange, setMaxFreqRange] = useState<250 | 500>(250);
   const [rpmEstimating, setRpmEstimating] = useState<boolean>(false);
   const [rpmEstimateMsg, setRpmEstimateMsg] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const currentLog = logs[currentLogIndex] || logs[0];
   const isRotorflight = currentLog?.rotorflightValidation?.isRotorflight ?? true;
@@ -53,7 +51,6 @@ export default function App() {
       console.log('[loadRealSample] Loaded:', loaded.length, 'logs, first:', loaded[0]?.filename);
       setLogs(loaded);
       setCurrentLogIndex(0);
-      setShowUploaderModal(false);
     } catch (e: any) {
       console.error('[loadRealSample] Error:', e);
       setSampleError(e?.message || '샘플 로그를 불러오지 못했습니다.');
@@ -188,48 +185,28 @@ export default function App() {
   }, [currentLog, selectedWindow, isRotorflight, logTooShort]);
 
   // Compute Overall Vibration Summary (only if Rotorflight)
-  const vibrationSummary = useMemo<VibrationSummary>(() => {
-    console.log('[vibrationSummary] currentLog:', currentLog?.filename, 'isRotorflight:', isRotorflight, 'logTooShort:', logTooShort, 'selectedWindow:', selectedWindow);
-    if (!currentLog || !isRotorflight) {
-      console.log('[vibrationSummary] Early return: !currentLog || !isRotorflight');
-      return {
-        gyroRms: { roll: 0, pitch: 0, yaw: 0, overall: 0 },
-        accRms: { x: 0, y: 0, z: 0, overall: 0 },
-        gyroPeak: { roll: 0, pitch: 0, yaw: 0 },
-        overallGrade: 'EXCELLENT',
-        detectedHeadSpeedRpm: 2100,
-        harmonics: { main1P: 35, main2P: 70, tail1P: 155, motor1P: 350 },
-        peaks: [],
-        diagnostics: [],
-      };
-    }
-    if (logTooShort) {
-      console.log('[vibrationSummary] Early return: logTooShort');
-      return {
-        gyroRms: { roll: 0, pitch: 0, yaw: 0, overall: 0 },
-        accRms: { x: 0, y: 0, z: 0, overall: 0 },
-        gyroPeak: { roll: 0, pitch: 0, yaw: 0 },
-        overallGrade: 'EXCELLENT',
-        detectedHeadSpeedRpm: 2100,
-        harmonics: { main1P: 35, main2P: 70, tail1P: 155, motor1P: 350 },
-        peaks: [],
-        diagnostics: [{
-          type: 'warning',
-          title: `비행 기록이 ${MIN_ANALYSIS_SEC}초 미만이므로 분석하지 않습니다`,
-          description: `이 로그의 비행 구간은 ${currentLog.durationSec.toFixed(1)}초입니다. 신뢰할 수 있는 진동 분석을 위해서는 최소 ${MIN_ANALYSIS_SEC}초 이상의 비행 기록이 필요합니다.`,
-          action: '더 긴 비행 로그를 불러오거나, 새로 비행하여 블랙박스를 기록하세요.',
-        }],
-      };
-    }
-    const result = analyzeVibrations(currentLog, heliConfig, selectedWindow);
-    console.log('[vibrationSummary] analyzeVibrations result:', result.gyroRms);
-    return result;
-  }, [currentLog, heliConfig, isRotorflight, logTooShort, selectedWindow]);
 
-  const handleLogLoaded = (newLogs: BlackboxLog[], fileName: string) => {
-    setLogs(newLogs);
-    setCurrentLogIndex(0);
-    setShowUploaderModal(false);
+  const openFileExplorer = () => fileInputRef.current?.click();
+
+  const handleBblFileSelected = async (files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    const file = files[0];
+    setFileError(null);
+    setIsLoading(true);
+    try {
+      const result = await parseBlackboxFile(file, file.name);
+      if (result.logs.length === 0) {
+        throw new Error('파일에서 유효한 블랙박스 비행 로그를 찾을 수 없습니다.');
+      }
+      setLogs(result.logs);
+      setCurrentLogIndex(0);
+    } catch (err: any) {
+      console.error(err);
+      setFileError(err?.message || '파일을 분석하는 중 오류가 발생했습니다. 올바른 .BBL 또는 .CSV 파일인지 확인해주세요.');
+    } finally {
+      setIsLoading(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
   };
 
   // 타임라인 바 RPM 조회 (파란 범위/빨간 지점 통합 — 센서/추정 공용)
@@ -258,7 +235,15 @@ export default function App() {
         logs={logs}
         currentLogIndex={currentLogIndex}
         onSelectLog={setCurrentLogIndex}
-        onNewFileClick={() => setShowUploaderModal(true)}
+        onNewFileClick={openFileExplorer}
+      />
+      {/* 숨겨진 파일 입력: BBL 열기 버튼이 바로 파일탐색기로 연결 */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept=".bbl,.BBL,.csv,.CSV,.txt,.TXT"
+        className="hidden"
+        onChange={e => handleBblFileSelected(e.target.files)}
       />
 
       {/* Main Content Area */}
@@ -293,7 +278,7 @@ export default function App() {
           <div className="flex flex-col gap-4">
             <NonRotorflightNotice
               log={currentLog}
-              onOpenNewFile={() => setShowUploaderModal(true)}
+              onOpenNewFile={openFileExplorer}
               onLoadValidSample={() => loadRealSample()}
             />
           </div>
@@ -340,18 +325,19 @@ export default function App() {
               </div>
             )}
 
-            {/* Main Content */}
+            {/* Main Content — FFT + 타임라인 2개 박스만 유지 */}
             <div className="flex flex-col gap-5">
-              {/* Top Vibration Health & Metrics */}
-              <VibrationOverview
-                summary={vibrationSummary}
-                log={currentLog}
-                onSelectPeak={freq => {
-                  // Focus on peak if needed
-                }}
-              />
-
-               {/* Interactive FFT Spectrum Chart */}
+              {fileError && (
+                <p className={`text-xs font-semibold ${isDark ? 'text-rose-300' : 'text-rose-600'}`}>
+                  {fileError}
+                </p>
+              )}
+              {isLoading && (
+                <p className={`text-xs font-semibold ${isDark ? 'text-cyan-300' : 'text-cyan-700'}`}>
+                  BBL 파일을 불러오는 중...
+                </p>
+              )}
+              {/* Interactive FFT Spectrum Chart */}
               <FftSpectrumView
                 fft={activeFft}
                 headSpeedRpm={heliConfig.mainRpm}
@@ -379,57 +365,10 @@ export default function App() {
                 onTimeChange={setCurrentTimeSec}
                 selectionRpm={selectionRpm}
               />
-
-              {/* Harmonics & Rotorflight Filter Tuner */}
-              <HarmonicsTuningAdvisor
-                config={heliConfig}
-                onConfigChange={setHeliConfig}
-                detectedRpm={vibrationSummary.detectedHeadSpeedRpm}
-              />
             </div>
           </>
         )}
       </main>
-
-      {/* File Uploader Modal */}
-      {showUploaderModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-xs p-4 overflow-y-auto">
-          <div
-            className={`w-full max-w-3xl rounded-3xl border p-6 shadow-2xl relative my-8 transition-colors ${
-              isDark ? 'bg-slate-900 border-slate-700' : 'bg-white border-slate-200'
-            }`}
-          >
-            <div
-              className={`flex items-center justify-between pb-4 mb-4 border-b ${
-                isDark ? 'border-slate-800' : 'border-slate-200'
-              }`}
-            >
-              <div className="flex items-center gap-2">
-                <UploadCloud className="w-5 h-5 text-cyan-500" />
-                <h3 className={`text-base font-bold ${isDark ? 'text-white' : 'text-slate-900'}`}>
-                  Rotorflight 블랙박스 파일 불러오기
-                </h3>
-              </div>
-              <button
-                onClick={() => setShowUploaderModal(false)}
-                className={`px-2.5 py-1 rounded-lg text-xs font-semibold cursor-pointer ${
-                  isDark
-                    ? 'bg-slate-800 hover:bg-slate-700 text-slate-300'
-                    : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
-                }`}
-              >
-                닫기 ✕
-              </button>
-            </div>
-
-            <FileUploader
-              onLogLoaded={handleLogLoaded}
-              isLoading={isLoading}
-              setIsLoading={setIsLoading}
-            />
-          </div>
-        </div>
-      )}
 
       {/* Offline Status Indicator */}
       <OfflineIndicator />
