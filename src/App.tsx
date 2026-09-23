@@ -3,7 +3,6 @@ import { BlackboxLog, HeliConfig, FftResult } from './types/blackbox';
 import { Header } from './components/Header';
 import { FftSpectrumView } from './components/FftSpectrumView';
 import { TimeDomainView } from './components/TimeDomainView';
-import { NonRotorflightNotice } from './components/NonRotorflightNotice';
 import { OfflineIndicator } from './components/OfflineIndicator';
 import { DEFAULT_SAMPLE, REAL_SAMPLES, fetchSampleLogs } from './utils/samples';
 import { computeMultiAxisFft } from './utils/fft';
@@ -38,7 +37,6 @@ export default function App() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const currentLog = logs[currentLogIndex] || logs[0];
-  const isRotorflight = currentLog?.rotorflightValidation?.isRotorflight ?? true;
 
   const loadRealSample = useCallback(async (sampleId: string = DEFAULT_SAMPLE.id) => {
     const sample = REAL_SAMPLES.find(s => s.id === sampleId) ?? DEFAULT_SAMPLE;
@@ -81,8 +79,9 @@ export default function App() {
 
   // When log changes, update window and detected RPM.
   // RPM 센서 없으면 Gyro STFT로 추정 RPM을 기존 rpm 배열과 동일 인터페이스로 주입.
+  // ※ 헤더 형식과 무관하게 항상 분석 시도 (Betaflight 등 비-Rotorflight 로그도 허용)
   useEffect(() => {
-    if (currentLog && isRotorflight) {
+    if (currentLog) {
       const dur = currentLog.durationSec;
       if (dur >= 60) {
         setSelectedWindow({ start: 30, end: dur - 30 });
@@ -109,12 +108,12 @@ export default function App() {
         }
       }
     }
-  }, [currentLog, isRotorflight]);
+  }, [currentLog]);
 
   // RPM 센서 없는 로그: 자이로 STFT 추정 (비동기 청크 처리, 메인스레드 블로킹 방지)
   // ※ RPM추정완료 UI 항목은 삭제됨 — 추정 기능 자체는 유지
   useEffect(() => {
-    if (!currentLog || !isRotorflight) return;
+    if (!currentLog) return;
     if (currentLog.rpmSource !== 'none') {
       return;
     }
@@ -144,7 +143,7 @@ export default function App() {
     });
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentLog?.filename, currentLog?.totalFrames, isRotorflight]);
+  }, [currentLog?.filename, currentLog?.totalFrames]);
 
   const handleHeadSpeedRpmChange = (rpm: number) => {
     setHeliConfig(prev => ({ ...prev, mainRpm: rpm }));
@@ -153,7 +152,7 @@ export default function App() {
   // 로그 전체 길이가 MIN_ANALYSIS_SEC 미만이면 진동 분석을 하지 않는다.
   const logTooShort = !!currentLog && currentLog.durationSec < MIN_ANALYSIS_SEC;
   const activeFft = useMemo<FftResult>(() => {
-    if (!currentLog || !isRotorflight || logTooShort) {
+    if (!currentLog || logTooShort) {
       return emptyFftResult();
     }
 
@@ -168,9 +167,9 @@ export default function App() {
       endIdx,
       1024
     );
-  }, [currentLog, selectedWindow, isRotorflight, logTooShort]);
+  }, [currentLog, selectedWindow, logTooShort]);
 
-  // Compute Overall Vibration Summary (only if Rotorflight)
+  // Compute Overall Vibration Summary
 
   const openFileExplorer = () => fileInputRef.current?.click();
 
@@ -259,14 +258,6 @@ export default function App() {
                 기본 샘플 로그를 불러오는 중...
               </p>
             )}
-          </div>
-        ) : !isRotorflight ? (
-          <div className="flex flex-col gap-4">
-            <NonRotorflightNotice
-              log={currentLog}
-              onOpenNewFile={openFileExplorer}
-              onLoadValidSample={() => loadRealSample()}
-            />
           </div>
         ) : (
           <>
