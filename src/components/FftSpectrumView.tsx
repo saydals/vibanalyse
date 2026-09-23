@@ -50,9 +50,10 @@ export const FftSpectrumView: React.FC<FftSpectrumViewProps> = ({
   const [showRoll, setShowRoll] = useState(true);
   const [showPitch, setShowPitch] = useState(true);
   const [showYaw, setShowYaw] = useState(true);
-  // 피크 마커 / RPM 하모닉 항상 표시
+  // 피크 마커(최대 9개) 일괄 표시 ON/OFF — Y축 왼쪽 Mark 버튼
+  const [showPeakMarkers, setShowPeakMarkers] = useState(true);
+  // RPM 하모닉 수직선 항상 표시
   const showHarmonics = true;
-  const showPeakMarkers = true;
 
   // Y-axis resolution mode: 'auto' | manual step presets
   const [yScalePreset, setYScalePreset] = useState<
@@ -684,7 +685,23 @@ export const FftSpectrumView: React.FC<FftSpectrumViewProps> = ({
             </button>
           </div>
 
-          {/* Y-Axis Step / Scale Preset Selector (dropdown) */}
+          {/* Peak Markers Toggle (Mark) + Y-Axis Step / Scale Preset Selector (dropdown) */}
+          {/* Mark 버튼: 피크 주파수 표시(최대 9개) 일괄 표시/숨김 */}
+          <button
+            onClick={() => setShowPeakMarkers(v => !v)}
+            title="피크 주파수 표시(최대 9개) 일괄 표시/숨김"
+            className={`px-2 py-1 rounded-lg border text-xs font-medium transition cursor-pointer ${
+              showPeakMarkers
+                ? isDark
+                  ? 'bg-cyan-950 text-cyan-300 border-cyan-800/60 font-bold'
+                  : 'bg-white text-cyan-800 border-cyan-300 font-bold shadow-xs'
+                : isDark
+                ? 'bg-slate-950 text-slate-500 border-slate-800 hover:text-slate-300'
+                : 'bg-slate-100 text-slate-500 border-slate-200 hover:text-slate-700'
+            }`}
+          >
+            Mark
+          </button>
           <div
             className={`flex items-center gap-1.5 rounded-lg px-2 py-1 border text-xs ${
               isDark ? 'bg-slate-950 border-slate-800' : 'bg-slate-100 border-slate-200'
