@@ -54,8 +54,10 @@ export const FftSpectrumView: React.FC<FftSpectrumViewProps> = ({
   const showHarmonics = true;
   const showPeakMarkers = true;
 
-  // Y-axis resolution mode: 'auto' | '0.2' | '0.5' | '1.0' | '2.0' | '5.0'
-  const [yScalePreset, setYScalePreset] = useState<'auto' | '0.2' | '0.5' | '1.0' | '2.0' | '5.0'>('auto');
+  // Y-axis resolution mode: 'auto' | manual step presets
+  const [yScalePreset, setYScalePreset] = useState<
+    'auto' | '0.01' | '0.02' | '0.05' | '0.2' | '0.5' | '1.0' | '2.0' | '5.0'
+  >('auto');
 
   // Hover state
   const [hoverInfo, setHoverInfo] = useState<{
@@ -142,10 +144,13 @@ export const FftSpectrumView: React.FC<FftSpectrumViewProps> = ({
 
     const ticks: number[] = [];
     const numSteps = Math.round(maxAmp / step);
-    const decimals = step < 0.05 ? 2 : step < 1 ? 1 : 0;
+    const decimals = step < 0.1 ? 2 : step < 1 ? 1 : 0;
     for (let i = 0; i <= numSteps; i++) {
       ticks.push(+(i * step).toFixed(decimals));
     }
+    // 미세 스텝(0.01/0.02/0.05) 수동 선택 시 눈금이 수백 개가 되지 않도록
+    // 최대 40개까지만 실제 렌더링 (라벨/그리드 stride)
+    const tickStride = Math.max(1, Math.ceil(numSteps / 40));
 
     return {
       step,
@@ -153,6 +158,7 @@ export const FftSpectrumView: React.FC<FftSpectrumViewProps> = ({
       ticks,
       decimals,
       numSteps,
+      tickStride,
     };
   }, [maxObservedAmp, yScalePreset]);
 
@@ -323,7 +329,8 @@ export const FftSpectrumView: React.FC<FftSpectrumViewProps> = ({
     // Y-Axis (Adaptive Amplitude Subdivisions)
     ctx.textAlign = 'right';
     ctx.textBaseline = 'middle';
-    yAxisConfig.ticks.forEach(yVal => {
+    yAxisConfig.ticks.forEach((yVal, idx) => {
+      if (idx % yAxisConfig.tickStride !== 0 && idx !== yAxisConfig.ticks.length - 1) return;
       const y = padTop + plotH - (yVal / yAxisConfig.maxAmp) * plotH;
 
       ctx.beginPath();
@@ -697,6 +704,9 @@ export const FftSpectrumView: React.FC<FftSpectrumViewProps> = ({
               }`}
             >
               <option value="auto">자동 ({yAxisConfig.step}°)</option>
+              <option value="0.01">0.01°</option>
+              <option value="0.02">0.02°</option>
+              <option value="0.05">0.05°</option>
               <option value="0.2">0.2°</option>
               <option value="0.5">0.5°</option>
               <option value="1.0">1.0°</option>
@@ -716,22 +726,26 @@ export const FftSpectrumView: React.FC<FftSpectrumViewProps> = ({
               헤드스피드
             </span>
             <input
-              type="number"
+              type="text"
+              inputMode="numeric"
               value={localHeadSpeedRpm}
               onChange={e => {
-                const val = Math.max(0, Math.min(10000, Number(e.target.value) || 0));
+                const digits = e.target.value.replace(/[^0-9]/g, '').slice(0, 5);
+                if (digits === '') {
+                  setLocalHeadSpeedRpm(0);
+                  onHeadSpeedRpmChange?.(0);
+                  return;
+                }
+                const val = Math.max(0, Math.min(10000, parseInt(digits, 10)));
                 setLocalHeadSpeedRpm(val);
                 onHeadSpeedRpmChange?.(val);
               }}
-              style={{ width: `${Math.max(4, String(localHeadSpeedRpm ?? '').length + 1.5)}ch` }}
-              className={`rounded px-1.5 py-0.5 font-mono text-xs outline-none cursor-pointer ${
+              size={Math.max(4, String(localHeadSpeedRpm ?? '').length + 1)}
+              className={`rounded px-1.5 py-0.5 font-mono text-xs outline-none cursor-text text-right ${
                 isDark
                   ? 'bg-slate-800 text-white border border-slate-700'
                   : 'bg-white text-slate-900 border border-slate-300'
               }`}
-              min="0"
-              max="10000"
-              step="50"
             />
             <span className={`text-[11px] font-medium whitespace-nowrap ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
               RPM
