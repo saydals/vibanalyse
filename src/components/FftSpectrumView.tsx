@@ -1,25 +1,21 @@
 import React, { useRef, useEffect, useState, useMemo } from 'react';
-import { FftResult, HeliConfig, RpmSource } from '../types/blackbox';
+import { FftResult, HeliConfig } from '../types/blackbox';
 import { useTheme } from '../context/ThemeContext';
-import { Activity, Sliders, Sparkles, Check, ChevronDown, ShieldAlert } from 'lucide-react';
+import { Activity, ShieldAlert } from 'lucide-react';
 
 interface FftSpectrumViewProps {
   fft: FftResult;
   headSpeedRpm: number;
   config?: HeliConfig;
-  activeWindowSec?: { start: number; end: number };
   onHeadSpeedRpmChange?: (rpm: number) => void;
   maxFreqRange?: 250 | 500;
   onMaxFreqRangeChange?: (range: 250 | 500) => void;
   /** 분석 불가 안내(예: 선택 구간 < 30초). null이면 정상 스펙트럼 표시 */
   analysisNotice?: string | null;
-  rpmSource?: RpmSource;
-  rpmEstimateMsg?: string | null;
-  rpmEstimating?: boolean;
 }
 
 interface DetectedPeak {
-  axis: 'Roll' | 'Pitch' | 'Yaw' | 'Acc';
+  axis: 'Roll' | 'Pitch' | 'Yaw';
   freq: number;
   amp: number;
   harmonicName?: string;
@@ -31,14 +27,10 @@ export const FftSpectrumView: React.FC<FftSpectrumViewProps> = ({
   fft,
   headSpeedRpm,
   config,
-  activeWindowSec,
   onHeadSpeedRpmChange,
   maxFreqRange = 250,
   onMaxFreqRangeChange,
   analysisNotice,
-  rpmSource,
-  rpmEstimateMsg,
-  rpmEstimating,
 }) => {
   const { theme } = useTheme();
   const isDark = theme === 'dark';
@@ -58,12 +50,9 @@ export const FftSpectrumView: React.FC<FftSpectrumViewProps> = ({
   const [showRoll, setShowRoll] = useState(true);
   const [showPitch, setShowPitch] = useState(true);
   const [showYaw, setShowYaw] = useState(true);
-  const [showAcc, setShowAcc] = useState(false);
-  const [showHarmonics, setShowHarmonics] = useState(true);
-  const [showPeakMarkers, setShowPeakMarkers] = useState(true);
-  const [showFilterSim, setShowFilterSim] = useState(false);
-  const [simNotchFreq, setSimNotchFreq] = useState<number>(160);
-  const [simNotchQ, setSimNotchQ] = useState<number>(300);
+  // 피크 마커 / RPM 하모닉 항상 표시
+  const showHarmonics = true;
+  const showPeakMarkers = true;
 
   // Y-axis resolution mode: 'auto' | '0.2' | '0.5' | '1.0' | '2.0' | '5.0'
   const [yScalePreset, setYScalePreset] = useState<'auto' | '0.2' | '0.5' | '1.0' | '2.0' | '5.0'>('auto');
@@ -88,13 +77,6 @@ export const FftSpectrumView: React.FC<FftSpectrumViewProps> = ({
   const motorRatio = (config?.mainGearTeeth || 110) / (config?.motorPinionTeeth || 11);
   const motor1P = main1P * motorRatio;
 
-  // Sync simulated notch default if tail harmonic exists
-  useEffect(() => {
-    if (tail1P > 30) {
-      setSimNotchFreq(Math.round(tail1P));
-    }
-  }, [tail1P]);
-
   useEffect(() => {
     setLocalHeadSpeedRpm(headSpeedRpm);
   }, [headSpeedRpm]);
@@ -115,12 +97,9 @@ export const FftSpectrumView: React.FC<FftSpectrumViewProps> = ({
       if (showRoll) max = Math.max(max, fft.roll[i]);
       if (showPitch) max = Math.max(max, fft.pitch[i]);
       if (showYaw) max = Math.max(max, fft.yaw[i]);
-      if (showAcc) {
-        max = Math.max(max, fft.accX[i] * 30, fft.accY[i] * 30, fft.accZ[i] * 30);
-      }
     }
     return max;
-  }, [fft, maxFreqRange, skipHz, showRoll, showPitch, showYaw, showAcc]);
+  }, [fft, maxFreqRange, skipHz, showRoll, showPitch, showYaw]);
 
   // Adaptive Y-axis configuration:
   // Peaks always appear at 90% of Y-axis height (maxAmp = maxObservedAmp / 0.9)
@@ -186,7 +165,7 @@ export const FftSpectrumView: React.FC<FftSpectrumViewProps> = ({
     );
 
     const channels: Array<{
-      name: 'Roll' | 'Pitch' | 'Yaw' | 'Acc';
+      name: 'Roll' | 'Pitch' | 'Yaw';
       data: Float32Array;
       color: string;
       bg: string;
@@ -196,7 +175,6 @@ export const FftSpectrumView: React.FC<FftSpectrumViewProps> = ({
       { name: 'Roll', data: fft.roll, color: '#38bdf8', bg: '#0284c7', active: showRoll, scale: 1 },
       { name: 'Pitch', data: fft.pitch, color: '#f59e0b', bg: '#d97706', active: showPitch, scale: 1 },
       { name: 'Yaw', data: fft.yaw, color: '#10b981', bg: '#059669', active: showYaw, scale: 1 },
-      { name: 'Acc', data: fft.accZ, color: '#f43f5e', bg: '#e11d48', active: showAcc, scale: 30 },
     ];
 
     channels.forEach(ch => {
@@ -255,7 +233,7 @@ export const FftSpectrumView: React.FC<FftSpectrumViewProps> = ({
 
     // Sort by amplitude descending
     return list.sort((a, b) => b.amp - a.amp);
-  }, [fft, maxFreqRange, skipHz, showRoll, showPitch, showYaw, showAcc, main1P, main2P, tail1P, motor1P, bladeCount]);
+  }, [fft, maxFreqRange, skipHz, showRoll, showPitch, showYaw, main1P, main2P, tail1P, motor1P, bladeCount]);
 
   // Overall highest peak
   const globalMaxPeak = detectedPeaks[0] || null;
@@ -403,32 +381,7 @@ export const FftSpectrumView: React.FC<FftSpectrumViewProps> = ({
       });
     }
 
-    // Simulated Filter Response Curve (Notch Filter)
-    if (showFilterSim && simNotchFreq > 0) {
-      ctx.save();
-      ctx.strokeStyle = 'rgba(239, 68, 68, 0.7)';
-      ctx.lineWidth = 2;
-      ctx.setLineDash([6, 3]);
-      ctx.beginPath();
-
-      for (let px = 0; px <= plotW; px += 2) {
-        const f = (px / plotW) * maxFreqRange;
-        const deltaF = Math.abs(f - simNotchFreq);
-        const bw = simNotchFreq / (simNotchQ / 100);
-        const att = Math.min(1.0, (deltaF / Math.max(1, bw)) ** 2);
-        const yNorm = att;
-        const y = padTop + (1 - yNorm) * plotH * 0.75 + 10;
-        if (px === 0) ctx.moveTo(padLeft + px, y);
-        else ctx.lineTo(padLeft + px, y);
-      }
-      ctx.stroke();
-
-      // Notch center band
-      const notchX = padLeft + (simNotchFreq / maxFreqRange) * plotW;
-      ctx.fillStyle = 'rgba(239, 68, 68, 0.15)';
-      ctx.fillRect(notchX - 12, padTop, 24, plotH);
-      ctx.restore();
-    }
+    // Simulated Filter Response Curve (Notch Filter) — 삭제됨
 
     // Function to draw FFT line
     const drawSpectrumLine = (data: Float32Array, color: string, scaleFactor: number = 1.0) => {
@@ -462,12 +415,6 @@ export const FftSpectrumView: React.FC<FftSpectrumViewProps> = ({
     if (showRoll) drawSpectrumLine(fft.roll, '#38bdf8');   // Cyan Roll
     if (showPitch) drawSpectrumLine(fft.pitch, '#f59e0b'); // Amber Pitch
     if (showYaw) drawSpectrumLine(fft.yaw, '#10b981');     // Emerald Yaw
-
-    if (showAcc) {
-      drawSpectrumLine(fft.accX, '#f43f5e', 30);
-      drawSpectrumLine(fft.accY, '#8b5cf6', 30);
-      drawSpectrumLine(fft.accZ, '#ec4899', 30);
-    }
 
     // Distinct On-Canvas Vibration Peak Markers
     if (showPeakMarkers && detectedPeaks.length > 0) {
@@ -555,9 +502,6 @@ export const FftSpectrumView: React.FC<FftSpectrumViewProps> = ({
     showRoll,
     showPitch,
     showYaw,
-    showAcc,
-    showHarmonics,
-    showPeakMarkers,
     hoverInfo,
     yAxisConfig,
     detectedPeaks,
@@ -641,19 +585,7 @@ export const FftSpectrumView: React.FC<FftSpectrumViewProps> = ({
           <div>
             <h3 className={`text-sm font-semibold flex items-center gap-1.5 ${isDark ? 'text-white' : 'text-slate-900'}`}>
               <span>FFT 진동 주파수 스펙트럼</span>
-              {activeWindowSec && (
-                <span
-                  className={`text-xs px-2 py-0.5 rounded font-mono ${
-                    isDark ? 'bg-slate-800 text-cyan-300' : 'bg-slate-100 text-cyan-700'
-                  }`}
-                >
-                  {activeWindowSec.start.toFixed(1)}s ~ {activeWindowSec.end.toFixed(1)}s 구간
-                </span>
-              )}
             </h3>
-            <p className={`text-xs ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
-              세로축 자동 세분화: {yAxisConfig.step}도 단위 (최대 {yAxisConfig.maxAmp.toFixed(1)}°/s 스케일)
-            </p>
           </div>
         </div>
 
@@ -710,20 +642,6 @@ export const FftSpectrumView: React.FC<FftSpectrumViewProps> = ({
               <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
               Yaw
             </button>
-            <button
-              onClick={() => setShowAcc(!showAcc)}
-              className={`px-2 py-1 rounded font-medium transition cursor-pointer ${
-                showAcc
-                  ? isDark
-                    ? 'bg-rose-950 text-rose-300 border border-rose-700/50'
-                    : 'bg-white text-rose-700 border border-rose-300 shadow-xs'
-                  : isDark
-                  ? 'text-slate-500 hover:text-slate-300'
-                  : 'text-slate-500 hover:text-slate-700'
-              }`}
-            >
-              Acc(G)
-            </button>
           </div>
 
           {/* Y-Axis Step / Scale Preset Selector */}
@@ -763,39 +681,6 @@ export const FftSpectrumView: React.FC<FftSpectrumViewProps> = ({
             ))}
           </div>
 
-          {/* Peak Marker Toggle */}
-          <button
-            onClick={() => setShowPeakMarkers(!showPeakMarkers)}
-            className={`px-2.5 py-1 rounded-lg text-xs font-medium border transition flex items-center gap-1 cursor-pointer ${
-              showPeakMarkers
-                ? isDark
-                  ? 'bg-purple-900/40 border-purple-500/50 text-purple-300'
-                  : 'bg-purple-50 border-purple-300 text-purple-700'
-                : isDark
-                ? 'bg-slate-800 border-slate-700 text-slate-400'
-                : 'bg-slate-100 border-slate-200 text-slate-600'
-            }`}
-          >
-            <Sparkles className="w-3 h-3" />
-            <span>피크 마커</span>
-          </button>
-
-          {/* Harmonics Toggle */}
-          <button
-            onClick={() => setShowHarmonics(!showHarmonics)}
-            className={`px-2.5 py-1 rounded-lg text-xs font-medium border transition cursor-pointer ${
-              showHarmonics
-                ? isDark
-                  ? 'bg-blue-900/40 border-blue-600/50 text-blue-300'
-                  : 'bg-blue-50 border-blue-300 text-blue-700'
-                : isDark
-                ? 'bg-slate-800 border-slate-700 text-slate-400'
-                : 'bg-slate-100 border-slate-200 text-slate-600'
-            }`}
-          >
-            RPM 하모닉
-          </button>
-
           {/* Head Speed RPM Input */}
           <div
             className={`flex items-center gap-1.5 rounded-lg px-2 py-1 border text-xs ${
@@ -826,28 +711,7 @@ export const FftSpectrumView: React.FC<FftSpectrumViewProps> = ({
             <span className={`text-[11px] font-medium whitespace-nowrap ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
               RPM
             </span>
-            {rpmSource === 'stft_estimated' && (
-              <span
-                title="RPM 센서 없음 – 자이로 추정값"
-                className={`px-1.5 py-0.5 rounded text-[10px] font-bold whitespace-nowrap ${
-                  isDark ? 'bg-amber-500/15 border border-amber-500/40 text-amber-300' : 'bg-amber-50 border border-amber-300 text-amber-700'
-                }`}
-              >
-                ✱추정
-              </span>
-            )}
           </div>
-          {rpmEstimateMsg && (
-            <div
-              className={`flex items-center gap-1.5 rounded-lg px-2 py-1 border text-[11px] font-medium ${
-                isDark ? 'bg-slate-950 border-slate-800 text-slate-300' : 'bg-slate-100 border-slate-200 text-slate-600'
-              }`}
-              title={rpmSource === 'stft_estimated' ? 'RPM 센서 없음 – 자이로 STFT 추정값' : undefined}
-            >
-              {rpmEstimating && <span className="inline-block w-3 h-3 rounded-full border-2 border-cyan-500 border-t-transparent animate-spin" />}
-              <span>{rpmEstimateMsg}</span>
-            </div>
-          )}
 
           {/* Max Frequency Range Selector */}
           <div
@@ -906,92 +770,6 @@ export const FftSpectrumView: React.FC<FftSpectrumViewProps> = ({
         </div>
       </div>
 
-      {/* Prominent Detected Peaks Quick Bar */}
-      {detectedPeaks.length > 0 && (
-        <div
-          className={`p-2 rounded-xl border flex flex-wrap items-center justify-between gap-2 text-xs transition-colors ${
-            isDark ? 'bg-slate-950/70 border-slate-800' : 'bg-slate-50 border-slate-200'
-          }`}
-        >
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="font-semibold flex items-center gap-1 text-slate-400">
-              <Sparkles className="w-3.5 h-3.5 text-purple-400" />
-              <span>검출된 진동 피크:</span>
-            </span>
-
-            {detectedPeaks.slice(0, 4).map((peak, idx) => (
-              <button
-                key={idx}
-                onClick={() => {
-                  setSimNotchFreq(Math.round(peak.freq));
-                  setShowFilterSim(true);
-                }}
-                className={`px-2 py-1 rounded-lg border font-mono text-[11px] flex items-center gap-1.5 transition cursor-pointer ${
-                  isDark
-                    ? 'bg-slate-900 hover:bg-slate-800 border-slate-700 text-slate-200'
-                    : 'bg-white hover:bg-slate-100 border-slate-300 text-slate-800 shadow-2xs'
-                }`}
-                title="클릭 시 이 주파수에 가상 노치 필터를 적용합니다"
-              >
-                <span className="w-2 h-2 rounded-full" style={{ backgroundColor: peak.color }}></span>
-                <span className="font-bold">{peak.axis}:</span>
-                <span className="font-semibold text-cyan-500 dark:text-cyan-400">{peak.freq}Hz</span>
-                <span className="text-slate-400">({peak.amp.toFixed(2)}°/s)</span>
-                {peak.harmonicName && (
-                  <span className="px-1 py-0.2 rounded text-[10px] bg-purple-500/20 text-purple-400">
-                    {peak.harmonicName}
-                  </span>
-                )}
-              </button>
-            ))}
-          </div>
-
-          <div className="flex items-center gap-2 text-[11px] text-slate-400">
-            <span>
-              세로축: <strong className="text-cyan-400">{yAxisConfig.step}°/s 단위</strong> (최대 {yAxisConfig.maxAmp.toFixed(1)}°/s)
-            </span>
-          </div>
-        </div>
-      )}
-
-      {/* Filter Simulator Quick Bar if active */}
-      {showFilterSim && (
-        <div className="p-2.5 rounded-xl bg-slate-950/80 border border-red-500/30 flex flex-wrap items-center gap-4 text-xs text-slate-300">
-          <span className="font-semibold text-red-400 flex items-center gap-1">
-            <Sliders className="w-3.5 h-3.5" />
-            Rotorflight 가상 노치 필터 (Notch Simulation):
-          </span>
-          <div className="flex items-center gap-2">
-            <span>중심 주파수:</span>
-            <input
-              type="range"
-              min="20"
-              max={maxFreqRange}
-              value={simNotchFreq}
-              onChange={e => setSimNotchFreq(Number(e.target.value))}
-              className="w-32 accent-red-500 cursor-pointer"
-            />
-            <span className="font-mono text-white font-bold">{simNotchFreq} Hz</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <span>Q 팩터:</span>
-            <input
-              type="range"
-              min="100"
-              max="800"
-              step="50"
-              value={simNotchQ}
-              onChange={e => setSimNotchQ(Number(e.target.value))}
-              className="w-24 accent-red-500 cursor-pointer"
-            />
-            <span className="font-mono text-white font-bold">{simNotchQ}</span>
-          </div>
-          <span className="text-slate-400 text-[11px]">
-            * 빨간 점선 곡선이 노치 필터 감쇄 특성을 나타냅니다.
-          </span>
-        </div>
-      )}
-
       {/* Main Canvas Area */}
       <div
         ref={containerRef}
@@ -1014,9 +792,6 @@ export const FftSpectrumView: React.FC<FftSpectrumViewProps> = ({
             <ShieldAlert className={`w-8 h-8 ${isDark ? 'text-amber-400' : 'text-amber-600'}`} />
             <p className={`text-sm font-bold ${isDark ? 'text-amber-300' : 'text-amber-700'}`}>
               {analysisNotice}
-            </p>
-            <p className={`text-xs ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
-              타임라인에서 빠른 구간 선택(스풀업 / 호버링·비행중)을 이용하세요.
             </p>
           </div>
         )}
@@ -1065,44 +840,6 @@ export const FftSpectrumView: React.FC<FftSpectrumViewProps> = ({
                 </div>
               )}
             </div>
-          </div>
-        )}
-      </div>
-
-      {/* Legend & Harmonic Quick Indicators */}
-      <div className={`flex flex-wrap items-center justify-between gap-2 pt-1 text-xs ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
-        <div className="flex flex-wrap items-center gap-3">
-          <span className="flex items-center gap-1.5">
-            <span className="w-2.5 h-2.5 rounded-full bg-cyan-500"></span>
-            <span>Roll (롤 진동)</span>
-          </span>
-          <span className="flex items-center gap-1.5">
-            <span className="w-2.5 h-2.5 rounded-full bg-amber-500"></span>
-            <span>Pitch (피치 진동)</span>
-          </span>
-          <span className="flex items-center gap-1.5">
-            <span className="w-2.5 h-2.5 rounded-full bg-emerald-500"></span>
-            <span>Yaw (요/테일 진동)</span>
-          </span>
-        </div>
-
-        {showHarmonics && (
-          <div className="flex flex-wrap items-center gap-2 font-mono text-[11px]">
-            <span className={`px-2 py-0.5 rounded border ${
-              isDark ? 'bg-sky-950/60 border-sky-800/40 text-sky-300' : 'bg-sky-50 border-sky-200 text-sky-700'
-            }`} title={rpmSource === 'stft_estimated' ? 'RPM 센서 없음 – 자이로 추정값' : undefined}>
-              1P Main: {main1P.toFixed(1)}Hz ({Math.round(headSpeedRpm)} RPM{rpmSource === 'stft_estimated' ? ' ✱' : ''})
-            </span>
-            <span className={`px-2 py-0.5 rounded border ${
-              isDark ? 'bg-purple-950/60 border-purple-800/40 text-purple-300' : 'bg-purple-50 border-purple-200 text-purple-700'
-            }`}>
-              {bladeCount}P Blade: {main2P.toFixed(1)}Hz
-            </span>
-            <span className={`px-2 py-0.5 rounded border ${
-              isDark ? 'bg-amber-950/60 border-amber-800/40 text-amber-300' : 'bg-amber-50 border-amber-200 text-amber-700'
-            }`}>
-              Tail 1P: {tail1P.toFixed(1)}Hz (비 {tailRatio})
-            </span>
           </div>
         )}
       </div>

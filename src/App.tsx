@@ -35,8 +35,6 @@ export default function App() {
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [fileError, setFileError] = useState<string | null>(null);
   const [maxFreqRange, setMaxFreqRange] = useState<250 | 500>(250);
-  const [rpmEstimating, setRpmEstimating] = useState<boolean>(false);
-  const [rpmEstimateMsg, setRpmEstimateMsg] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const currentLog = logs[currentLogIndex] || logs[0];
@@ -114,22 +112,18 @@ export default function App() {
   }, [currentLog, isRotorflight]);
 
   // RPM 센서 없는 로그: 자이로 STFT 추정 (비동기 청크 처리, 메인스레드 블로킹 방지)
+  // ※ RPM추정완료 UI 항목은 삭제됨 — 추정 기능 자체는 유지
   useEffect(() => {
     if (!currentLog || !isRotorflight) return;
     if (currentLog.rpmSource !== 'none') {
-      setRpmEstimateMsg(null);
       return;
     }
     if (currentLog.totalFrames < 100 || currentLog.sampleRateHz <= 0) {
-      setRpmEstimateMsg('RPM 추정 불가 (데이터 부족)');
       return;
     }
     let cancelled = false;
-    setRpmEstimating(true);
-    setRpmEstimateMsg('RPM 자이로 추정 중…');
     estimateRpmForLogAsync(currentLog, () => {}).then(estimated => {
       if (cancelled) return;
-      setRpmEstimating(false);
       if (estimated.length === currentLog.totalFrames && estimated.length > 0) {
         let sum = 0; let count = 0;
         for (let i = 0; i < estimated.length; i++) {
@@ -142,18 +136,11 @@ export default function App() {
             l === currentLog ? { ...l, rpm: estimated, rpmSource: 'stft_estimated' as const } : l,
           ));
           setHeliConfig(prev => ({ ...prev, mainRpm: avg }));
-          setRpmEstimateMsg(`RPM 추정 완료 (평균 ${avg.toLocaleString()} RPM ✱추정)`);
-        } else {
-          setRpmEstimateMsg('RPM 추정 실패 — 1P 피크를 찾지 못했습니다');
         }
-      } else {
-        setRpmEstimateMsg('RPM 추정 실패 — 1P 피크를 찾지 못했습니다');
       }
     }).catch(e => {
       if (cancelled) return;
       console.error('[rpmEstimate] failed:', e);
-      setRpmEstimating(false);
-      setRpmEstimateMsg('RPM 추정 실패 — 1P 피크를 찾지 못했습니다');
     });
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -164,7 +151,6 @@ export default function App() {
   };
 
   // 로그 전체 길이가 MIN_ANALYSIS_SEC 미만이면 진동 분석을 하지 않는다.
-  // (빠른 구간 선택/수동 선택과 무관하게 30초 미만 로그는 분석 대상이 아니다.)
   const logTooShort = !!currentLog && currentLog.durationSec < MIN_ANALYSIS_SEC;
   const activeFft = useMemo<FftResult>(() => {
     if (!currentLog || !isRotorflight || logTooShort) {
@@ -215,7 +201,7 @@ export default function App() {
     return getRpmForSelection(currentLog, selectedWindow, currentTimeSec);
   }, [currentLog, selectedWindow, currentTimeSec]);
 
-  // 선택 구간 평균 RPM이 바뀌면 헤드스피드 표시도 추종 (수동 입력은 유지 — 추정/센서 주입 시에만 반영)
+  // 선택 구간 평균 RPM이 바뀌면 헤드스피드 표시도 추종
   useEffect(() => {
     if (!currentLog?.rpm || currentLog.rpm.length === 0) return;
     if (Number.isFinite(selectionRpm.rpm) && selectionRpm.count > 10) {
@@ -342,13 +328,9 @@ export default function App() {
                 fft={activeFft}
                 headSpeedRpm={heliConfig.mainRpm}
                 config={heliConfig}
-                activeWindowSec={selectedWindow}
                 onHeadSpeedRpmChange={handleHeadSpeedRpmChange}
                 maxFreqRange={maxFreqRange}
                 onMaxFreqRangeChange={setMaxFreqRange}
-                rpmSource={currentLog.rpmSource}
-                rpmEstimateMsg={rpmEstimateMsg}
-                rpmEstimating={rpmEstimating}
                 analysisNotice={
                   logTooShort
                     ? `비행 기록 ${currentLog.durationSec.toFixed(1)}초 — 최소 ${MIN_ANALYSIS_SEC}초가 못 되어 분석하지 않습니다.`
@@ -363,7 +345,6 @@ export default function App() {
                 onWindowChange={setSelectedWindow}
                 currentTimeSec={currentTimeSec}
                 onTimeChange={setCurrentTimeSec}
-                selectionRpm={selectionRpm}
               />
             </div>
           </>
