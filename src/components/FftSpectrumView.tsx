@@ -8,8 +8,8 @@ interface FftSpectrumViewProps {
   headSpeedRpm: number;
   config?: HeliConfig;
   onHeadSpeedRpmChange?: (rpm: number) => void;
-  maxFreqRange?: 250 | 500;
-  onMaxFreqRangeChange?: (range: 250 | 500) => void;
+  maxFreqRange?: 250 | 500 | 1000;
+  onMaxFreqRangeChange?: (range: 250 | 500 | 1000) => void;
   /** 분석 불가 안내(예: 선택 구간 < 30초). null이면 정상 스펙트럼 표시 */
   analysisNotice?: string | null;
 }
@@ -41,7 +41,7 @@ export const FftSpectrumView: React.FC<FftSpectrumViewProps> = ({
   const [localHeadSpeedRpm, setLocalHeadSpeedRpm] = useState<number>(headSpeedRpm);
 
   // View state
-  const [internalMaxFreqRange, setInternalMaxFreqRange] = useState<250 | 500>(maxFreqRange);
+  const [internalMaxFreqRange, setInternalMaxFreqRange] = useState<250 | 500 | 1000>(maxFreqRange);
   const activeMaxFreqRange = onMaxFreqRangeChange ? maxFreqRange : internalMaxFreqRange;
   const setActiveMaxFreqRange = onMaxFreqRangeChange || setInternalMaxFreqRange;
   // X축 시작(스킵) 주파수: 0 ~ 50 Hz. 그래프의 X축 0점이 이 주파수로 설정된다.
@@ -156,7 +156,19 @@ export const FftSpectrumView: React.FC<FftSpectrumViewProps> = ({
     };
   }, [maxObservedAmp, yScalePreset]);
 
-  // Detect prominent peaks for visible channels (support ultra-low vibrations down to 0.05°/s)
+  // Detect peaks anchored at harmonics: for each of Main 1P / Blade 2P / Tail 1P,
+  // find the strongest bin of each visible axis (Roll/Pitch/Yaw) near that harmonic.
+  // Display label is simplified to "**Hz(**/s)" only (no harmonic name prefix).
+  const harmonicPeakTargets = useMemo(() => {
+    const t: Array<{ key: 'main1P' | 'main2P' | 'tail1P'; freq: number; tol: number }> = [];
+    if (main1P > 0) {
+      t.push({ key: 'main1P', freq: main1P, tol: 4.5 });
+      t.push({ key: 'main2P', freq: main2P, tol: 7.0 });
+      t.push({ key: 'tail1P', freq: tail1P, tol: 14.0 });
+    }
+    return t;
+  }, [main1P, main2P, tail1P]);
+
   const detectedPeaks = useMemo<DetectedPeak[]>(() => {
     const list: DetectedPeak[] = [];
     const limitIdx = Math.min(
@@ -170,70 +182,77 @@ export const FftSpectrumView: React.FC<FftSpectrumViewProps> = ({
       color: string;
       bg: string;
       active: boolean;
-      scale: number;
     }> = [
-      { name: 'Roll', data: fft.roll, color: '#38bdf8', bg: '#0284c7', active: showRoll, scale: 1 },
-      { name: 'Pitch', data: fft.pitch, color: '#f59e0b', bg: '#d97706', active: showPitch, scale: 1 },
-      { name: 'Yaw', data: fft.yaw, color: '#10b981', bg: '#059669', active: showYaw, scale: 1 },
+      { name: 'Roll', data: fft.roll, color: '#38bdf8', bg: '#0284c7', active: showRoll },
+      { name: 'Pitch', data: fft.pitch, color: '#f59e0b', bg: '#d97706', active: showPitch },
+      { name: 'Yaw', data: fft.yaw, color: '#10b981', bg: '#059669', active: showYaw },
     ];
 
-    channels.forEach(ch => {
-      if (!ch.active) return;
-      let chMax = 0;
-      for (let i = 2; i < limitIdx; i++) {
-        const f = fft.frequencies[i];
-        if (f < Math.max(skipHz, 15) || f > maxFreqRange) continue;
-        const val = ch.data[i] * ch.scale;
-        if (val > chMax) chMax = val;
-      }
-
-      if (chMax < 0.04) return;
-      const threshold = Math.max(0.06, chMax * 0.35);
-
-      const candidates: Array<{ freq: number; amp: number }> = [];
+    // Helper: strongest local-maximum bin of a channel within [center-tol, center+tol]
+    const peakNear = (
+      data: Float32Array,
+      center: number,
+      tol: number
+    ): { freq: number; amp: number } | null => {
+      let best: { freq: number; amp: number } | null = null;
       for (let i = 2; i < limitIdx - 1; i++) {
         const f = fft.frequencies[i];
         if (f < Math.max(skipHz, 15) || f > maxFreqRange) continue;
-        const val = ch.data[i] * ch.scale;
-        if (val > ch.data[i - 1] * ch.scale && val > ch.data[i + 1] * ch.scale && val >= threshold) {
-          candidates.push({ freq: f, amp: val });
+        if (Math.abs(f - center) > tol) continue;
+        const val = data[i];
+        if (val > data[i - 1] && val > data[i + 1]) {
+          if (!best || val > best.amp) best = { freq: f, amp: val };
         }
       }
-
-      candidates.sort((a, b) => b.amp - a.amp);
-
-      // Pick top 1 or 2 distinct peaks per channel
-      const picked: Array<{ freq: number; amp: number }> = [];
-      for (const cand of candidates) {
-        if (!picked.some(p => Math.abs(p.freq - cand.freq) < 20)) {
-          picked.push(cand);
-          if (picked.length >= 2) break;
+      // Fallback: window maximum when no strict local maximum exists
+      if (!best) {
+        for (let i = 2; i < limitIdx; i++) {
+          const f = fft.frequencies[i];
+          if (f < Math.max(skipHz, 15) || f > maxFreqRange) continue;
+          if (Math.abs(f - center) > tol) continue;
+          const val = data[i];
+          if (!best || val > best.amp) best = { freq: f, amp: val };
         }
       }
+      if (!best || best.amp < 0.04) return null;
+      return best;
+    };
 
-      picked.forEach(p => {
-        let harmonicName: string | undefined;
-        if (main1P > 0) {
-          if (Math.abs(p.freq - main1P) <= 4.5) harmonicName = 'Main 1P';
-          else if (Math.abs(p.freq - main2P) <= 7.0) harmonicName = `${bladeCount}P Blade`;
-          else if (Math.abs(p.freq - tail1P) <= 14.0) harmonicName = 'Tail 1P';
-          else if (motor1P > 0 && Math.abs(p.freq - motor1P) <= 20.0) harmonicName = 'Motor';
-        }
-
+    channels.forEach(ch => {
+      if (!ch.active) return;
+      harmonicPeakTargets.forEach(target => {
+        // Skip harmonics outside the visible range
+        if (target.freq < Math.max(skipHz, 15) || target.freq > maxFreqRange) return;
+        const found = peakNear(ch.data, target.freq, target.tol);
+        if (!found) return;
         list.push({
           axis: ch.name,
-          freq: Math.round(p.freq * 10) / 10,
-          amp: Math.round(p.amp * 100) / 100,
-          harmonicName,
+          freq: Math.round(found.freq * 10) / 10,
+          amp: Math.round(found.amp * 100) / 100,
+          harmonicName: undefined,
           color: ch.color,
           bg: ch.bg,
         });
       });
     });
 
+    // De-duplicate: same axis + nearly same frequency (keep strongest)
+    const deduped: DetectedPeak[] = [];
+    list
+      .sort((a, b) => b.amp - a.amp)
+      .forEach(p => {
+        if (
+          !deduped.some(
+            q => q.axis === p.axis && Math.abs(q.freq - p.freq) < 5
+          )
+        ) {
+          deduped.push(p);
+        }
+      });
+
     // Sort by amplitude descending
-    return list.sort((a, b) => b.amp - a.amp);
-  }, [fft, maxFreqRange, skipHz, showRoll, showPitch, showYaw, main1P, main2P, tail1P, motor1P, bladeCount]);
+    return deduped.sort((a, b) => b.amp - a.amp);
+  }, [fft, maxFreqRange, skipHz, showRoll, showPitch, showYaw, harmonicPeakTargets]);
 
   // Overall highest peak
   const globalMaxPeak = detectedPeaks[0] || null;
@@ -417,9 +436,11 @@ export const FftSpectrumView: React.FC<FftSpectrumViewProps> = ({
     if (showYaw) drawSpectrumLine(fft.yaw, '#10b981');     // Emerald Yaw
 
     // Distinct On-Canvas Vibration Peak Markers
+    // 1P Main / 2P Blade / Tail harmonics x Roll/Pitch/Yaw axes (up to 9).
+    // Label simplified to "**Hz(**/s)" only.
     if (showPeakMarkers && detectedPeaks.length > 0) {
-      // Draw top prominent peaks (up to 4 to prevent crowding)
-      detectedPeaks.slice(0, 4).forEach((peak, rank) => {
+      const placed: Array<{ x0: number; x1: number; y: number }> = [];
+      detectedPeaks.slice(0, 9).forEach((peak, rank) => {
         const x = freqToX(peak.freq);
         const y = padTop + plotH - Math.min(plotH, (peak.amp / yAxisConfig.maxAmp) * plotH);
 
@@ -440,8 +461,26 @@ export const FftSpectrumView: React.FC<FftSpectrumViewProps> = ({
         ctx.strokeStyle = '#ffffff';
         ctx.stroke();
 
+        // Callout Pill Tag (simplified: no harmonic-name prefix)
+        const text = `${peak.freq}Hz(${peak.amp.toFixed(2)}°/s)`;
+        ctx.font = 'bold 10px sans-serif';
+        const tw = ctx.measureText(text).width + 12;
+        const pillX = Math.max(padLeft + 4, Math.min(padLeft + plotW - tw - 4, x - tw / 2));
+
+        // Stagger vertically when pills would overlap horizontally
+        let calloutY = Math.max(padTop + 14, y - 26 - rank * 2);
+        for (let attempt = 0; attempt < 6; attempt++) {
+          const overlap = placed.some(
+            p =>
+              Math.abs(pillX + tw / 2 - (p.x0 + p.x1) / 2) < (tw + (p.x1 - p.x0)) / 2 + 2 &&
+              Math.abs(calloutY - p.y) < 20
+          );
+          if (!overlap) break;
+          calloutY = Math.max(padTop + 14, calloutY - 20);
+        }
+        placed.push({ x0: pillX, x1: pillX + tw, y: calloutY });
+
         // Pin line up to callout
-        const calloutY = Math.max(padTop + 14, y - 26 - rank * 2);
         ctx.beginPath();
         ctx.setLineDash([2, 2]);
         ctx.strokeStyle = peak.color;
@@ -458,12 +497,6 @@ export const FftSpectrumView: React.FC<FftSpectrumViewProps> = ({
         ctx.closePath();
         ctx.fillStyle = peak.color;
         ctx.fill();
-
-        // Callout Pill Tag
-        const text = `${peak.harmonicName ? peak.harmonicName + ' ' : ''}${peak.freq}Hz (${peak.amp.toFixed(2)}°/s)`;
-        ctx.font = 'bold 10px sans-serif';
-        const tw = ctx.measureText(text).width + 12;
-        const pillX = Math.max(padLeft + 4, Math.min(padLeft + plotW - tw - 4, x - tw / 2));
 
         ctx.fillStyle = peak.bg;
         ctx.beginPath();
@@ -644,41 +677,32 @@ export const FftSpectrumView: React.FC<FftSpectrumViewProps> = ({
             </button>
           </div>
 
-          {/* Y-Axis Step / Scale Preset Selector */}
+          {/* Y-Axis Step / Scale Preset Selector (dropdown) */}
           <div
-            className={`flex items-center rounded-lg p-0.5 border text-xs ${
+            className={`flex items-center gap-1.5 rounded-lg px-2 py-1 border text-xs ${
               isDark ? 'bg-slate-950 border-slate-800' : 'bg-slate-100 border-slate-200'
             }`}
             title="진동 크기에 따른 세로축 세분화 단위 설정"
           >
-            <span className={`px-1.5 py-1 text-[11px] font-medium ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
-              Y축:
+            <span className={`text-[11px] font-medium whitespace-nowrap ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
+              Y축
             </span>
-            {(
-              [
-                { key: 'auto', label: `자동 (${yAxisConfig.step}°)` },
-                { key: '0.2', label: '0.2°' },
-                { key: '0.5', label: '0.5°' },
-                { key: '1.0', label: '1.0°' },
-                { key: '2.0', label: '2.0°' },
-              ] as const
-            ).map(opt => (
-              <button
-                key={opt.key}
-                onClick={() => setYScalePreset(opt.key)}
-                className={`px-1.5 py-1 rounded text-[11px] font-mono transition cursor-pointer ${
-                  yScalePreset === opt.key
-                    ? isDark
-                      ? 'bg-cyan-950 text-cyan-300 font-bold border border-cyan-800/60'
-                      : 'bg-white text-cyan-800 font-bold border border-cyan-200 shadow-xs'
-                    : isDark
-                    ? 'text-slate-400 hover:text-slate-200'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                {opt.label}
-              </button>
-            ))}
+            <select
+              value={yScalePreset}
+              onChange={e => setYScalePreset(e.target.value as typeof yScalePreset)}
+              className={`rounded px-1 py-0.5 font-mono text-xs outline-none cursor-pointer ${
+                isDark
+                  ? 'bg-slate-800 text-white border border-slate-700'
+                  : 'bg-white text-slate-900 border border-slate-300'
+              }`}
+            >
+              <option value="auto">자동 ({yAxisConfig.step}°)</option>
+              <option value="0.2">0.2°</option>
+              <option value="0.5">0.5°</option>
+              <option value="1.0">1.0°</option>
+              <option value="2.0">2.0°</option>
+              <option value="5.0">5.0°</option>
+            </select>
           </div>
 
           {/* Head Speed RPM Input */}
@@ -699,7 +723,8 @@ export const FftSpectrumView: React.FC<FftSpectrumViewProps> = ({
                 setLocalHeadSpeedRpm(val);
                 onHeadSpeedRpmChange?.(val);
               }}
-              className={`w-20 rounded px-1.5 py-0.5 font-mono text-xs outline-none cursor-pointer ${
+              style={{ width: `${Math.max(4, String(localHeadSpeedRpm ?? '').length + 1.5)}ch` }}
+              className={`rounded px-1.5 py-0.5 font-mono text-xs outline-none cursor-pointer ${
                 isDark
                   ? 'bg-slate-800 text-white border border-slate-700'
                   : 'bg-white text-slate-900 border border-slate-300'
@@ -713,29 +738,27 @@ export const FftSpectrumView: React.FC<FftSpectrumViewProps> = ({
             </span>
           </div>
 
-          {/* Max Frequency Range Selector */}
+          {/* Max Frequency Range Selector (dropdown: 250 / 500 / 1000) */}
           <div
-            className={`flex items-center rounded-lg p-0.5 border text-xs ${
+            className={`flex items-center gap-1.5 rounded-lg px-2 py-1 border text-xs ${
               isDark ? 'bg-slate-950 border-slate-800' : 'bg-slate-100 border-slate-200'
             }`}
           >
-            {( [250, 500] as const).map(range => (
-              <button
-                key={range}
-                onClick={() => setActiveMaxFreqRange(range)}
-                className={`px-2 py-1 rounded font-mono transition cursor-pointer ${
-                  activeMaxFreqRange === range
-                    ? isDark
-                      ? 'bg-slate-800 text-white font-semibold'
-                      : 'bg-white text-slate-900 font-semibold shadow-xs'
-                    : isDark
-                    ? 'text-slate-400 hover:text-slate-200'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                {range}Hz
-              </button>
-            ))}
+            <select
+              value={activeMaxFreqRange}
+              onChange={e => setActiveMaxFreqRange(Number(e.target.value) as 250 | 500 | 1000)}
+              className={`rounded px-1 py-0.5 font-mono text-xs outline-none cursor-pointer ${
+                isDark
+                  ? 'bg-slate-800 text-white border border-slate-700'
+                  : 'bg-white text-slate-900 border border-slate-300'
+              }`}
+            >
+              {([250, 500, 1000] as const).map(range => (
+                <option key={range} value={range}>
+                  {range}Hz
+                </option>
+              ))}
+            </select>
           </div>
 
           {/* Skip Hz — X축 시작(스킵) 주파수 0 ~ 50Hz */}

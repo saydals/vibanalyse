@@ -34,7 +34,7 @@ export default function App() {
   const [currentLogIndex, setCurrentLogIndex] = useState<number>(0);
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [fileError, setFileError] = useState<string | null>(null);
-  const [maxFreqRange, setMaxFreqRange] = useState<250 | 500>(250);
+  const [maxFreqRange, setMaxFreqRange] = useState<250 | 500 | 1000>(250);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const currentLog = logs[currentLogIndex] || logs[0];
