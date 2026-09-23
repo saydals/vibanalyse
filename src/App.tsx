@@ -3,7 +3,6 @@ import { BlackboxLog, HeliConfig, FftResult } from './types/blackbox';
 import { Header } from './components/Header';
 import { FftSpectrumView } from './components/FftSpectrumView';
 import { TimeDomainView } from './components/TimeDomainView';
-import { OfflineIndicator } from './components/OfflineIndicator';
 import { DEFAULT_SAMPLE, REAL_SAMPLES, fetchSampleLogs } from './utils/samples';
 import { computeMultiAxisFft } from './utils/fft';
 import { MIN_ANALYSIS_SEC, parseBlackboxFile } from './utils/blackboxParser';
@@ -377,8 +376,6 @@ export default function App() {
         )}
       </main>
 
-      {/* Offline Status Indicator */}
-      <OfflineIndicator />
     </div>
   );
 }
