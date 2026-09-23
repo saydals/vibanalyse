@@ -12,6 +12,11 @@ interface FftSpectrumViewProps {
   onMaxFreqRangeChange?: (range: 250 | 500 | 1000) => void;
   /** 분석 불가 안내(예: 선택 구간 < 30초). null이면 정상 스펙트럼 표시 */
   analysisNotice?: string | null;
+  /** FFT 분석 자이로 데이터 소스: filtered=gyroADC(필터 통과), raw=gyroRAW(미필터) */
+  gyroSource?: 'filtered' | 'raw';
+  onGyroSourceChange?: (source: 'filtered' | 'raw') => void;
+  /** 각 소스가 해당 로그에 기록되어 있는지 여부 (false면 그래프 숨김 안내) */
+  gyroSourceAvailable?: { filtered: boolean; raw: boolean };
 }
 
 interface DetectedPeak {
@@ -31,6 +36,9 @@ export const FftSpectrumView: React.FC<FftSpectrumViewProps> = ({
   maxFreqRange = 250,
   onMaxFreqRangeChange,
   analysisNotice,
+  gyroSource,
+  onGyroSourceChange,
+  gyroSourceAvailable,
 }) => {
   const { theme } = useTheme();
   const isDark = theme === 'dark';
@@ -39,6 +47,13 @@ export const FftSpectrumView: React.FC<FftSpectrumViewProps> = ({
   const containerRef = useRef<HTMLDivElement | null>(null);
 
   const [localHeadSpeedRpm, setLocalHeadSpeedRpm] = useState<number>(headSpeedRpm);
+
+  // 자이로 데이터 소스(Filtered=gyroADC / Raw=gyroRAW) — 상위 제어가 없으면 내부 상태 사용
+  const [internalGyroSource, setInternalGyroSource] = useState<'filtered' | 'raw'>('filtered');
+  const activeGyroSource = onGyroSourceChange ? gyroSource ?? 'filtered' : internalGyroSource;
+  const setActiveGyroSource = onGyroSourceChange || setInternalGyroSource;
+  // undefined(정보 없음) / true(로그에 기록됨) / false(기록 없음 → 그래프 숨김)
+  const gyroSourceLogged = gyroSourceAvailable ? gyroSourceAvailable[activeGyroSource] : undefined;
 
   // View state
   const [internalMaxFreqRange, setInternalMaxFreqRange] = useState<250 | 500 | 1000>(maxFreqRange);
@@ -626,6 +641,20 @@ export const FftSpectrumView: React.FC<FftSpectrumViewProps> = ({
           <div>
             <h3 className={`text-sm font-semibold flex items-center gap-1.5 ${isDark ? 'text-white' : 'text-slate-900'}`}>
               <span>FFT 진동 주파수 스펙트럼</span>
+              {/* 현재 분석에 쓰이는 BBL 필드 표시 */}
+              <span
+                className={`px-1.5 py-0.5 rounded border font-mono text-[10px] font-medium ${
+                  activeGyroSource === 'raw'
+                    ? isDark
+                      ? 'bg-violet-950/70 text-violet-300 border-violet-800/60'
+                      : 'bg-violet-50 text-violet-700 border-violet-300'
+                    : isDark
+                    ? 'bg-cyan-950/70 text-cyan-300 border-cyan-800/60'
+                    : 'bg-cyan-50 text-cyan-700 border-cyan-300'
+                }`}
+              >
+                {activeGyroSource === 'raw' ? 'gyroRAW' : 'gyroADC'}
+              </span>
             </h3>
           </div>
         </div>
@@ -684,6 +713,34 @@ export const FftSpectrumView: React.FC<FftSpectrumViewProps> = ({
               Yaw
             </button>
           </div>
+
+          {/* Data Source Toggle (Raw / Filtered) — Mark 버튼 왼쪽 */}
+          {/* 폭 고정(w-[76px]) → Raw ↔ Filtered 라벨이 바뀌어도 레이아웃이 흔들리지 않음 */}
+          <button
+            onClick={() => setActiveGyroSource(activeGyroSource === 'raw' ? 'filtered' : 'raw')}
+            title={
+              (activeGyroSource === 'raw'
+                ? '분석 데이터: Raw Gyro — gyroRAW (자이로 필터 통과 전)'
+                : '분석 데이터: Filtered Gyro — gyroADC (자이로 필터 통과 후)') +
+              (gyroSourceLogged === false ? '\n⚠ 이 로그에는 기록되어 있지 않습니다.' : '') +
+              `\n클릭하면 ${activeGyroSource === 'raw' ? 'Filtered' : 'Raw'}로 전환`
+            }
+            className={`w-[76px] px-2 py-1 rounded-lg border text-xs font-medium text-center transition cursor-pointer whitespace-nowrap ${
+              gyroSourceLogged === false
+                ? isDark
+                  ? 'bg-amber-950/60 text-amber-300 border-amber-800/60'
+                  : 'bg-amber-50 text-amber-700 border-amber-300'
+                : activeGyroSource === 'raw'
+                ? isDark
+                  ? 'bg-violet-950 text-violet-300 border-violet-800/60 font-bold'
+                  : 'bg-white text-violet-700 border-violet-300 font-bold shadow-xs'
+                : isDark
+                ? 'bg-cyan-950 text-cyan-300 border-cyan-800/60 font-bold'
+                : 'bg-white text-cyan-800 border-cyan-300 font-bold shadow-xs'
+            }`}
+          >
+            {activeGyroSource === 'raw' ? 'Raw' : 'Filtered'}
+          </button>
 
           {/* Peak Markers Toggle (Mark) + Y-Axis Step / Scale Preset Selector (dropdown) */}
           {/* Mark 버튼: 피크 주파수 표시(최대 9개) 일괄 표시/숨김 */}

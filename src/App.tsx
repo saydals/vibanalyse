@@ -151,23 +151,51 @@ export default function App() {
 
   // 로그 전체 길이가 MIN_ANALYSIS_SEC 미만이면 진동 분석을 하지 않는다.
   const logTooShort = !!currentLog && currentLog.durationSec < MIN_ANALYSIS_SEC;
+
+  // FFT 분석에 사용할 자이로 데이터 소스: filtered=gyroADC(자이로 필터 통과), raw=gyroRAW(미필터)
+  const [gyroSource, setGyroSource] = useState<'filtered' | 'raw'>('filtered');
+  const gyroSourceAvailable = useMemo(
+    () => ({
+      // 플래그가 없는 로그(구 경로)는 기존 동작 유지: Filtered 표시
+      filtered: currentLog ? currentLog.hasGyroFiltered !== false : false,
+      raw: !!currentLog?.hasGyroRaw,
+    }),
+    [currentLog],
+  );
+  // 선택한 소스가 로그에 기록되어 있지 않으면 그래프를 그리지 않는다(빈 스펙트럼)
+  const gyroSourceLogged = gyroSourceAvailable[gyroSource];
+
+  // 로그가 바뀌면 기록이 존재하는 소스로 자동 선택한다(사용자가 직접 전환한 값은 유지).
+  const gyroSourceLogRef = useRef<BlackboxLog | null>(null);
+  useEffect(() => {
+    if (!currentLog || gyroSourceLogRef.current === currentLog) return;
+    gyroSourceLogRef.current = currentLog;
+    if (currentLog.hasGyroFiltered) setGyroSource('filtered');
+    else if (currentLog.hasGyroRaw) setGyroSource('raw');
+  }, [currentLog]);
+
   const activeFft = useMemo<FftResult>(() => {
-    if (!currentLog || logTooShort) {
+    if (!currentLog || logTooShort || !gyroSourceLogged) {
       return emptyFftResult();
     }
 
     const startIdx = Math.max(0, Math.floor(selectedWindow.start * currentLog.sampleRateHz));
     const endIdx = Math.min(currentLog.totalFrames, Math.floor(selectedWindow.end * currentLog.sampleRateHz));
 
+    // gyroRAW 필드가 없는 로그는 gyro(대체 데이터)를 그대로 사용한다.
+    const gyroSeries = gyroSource === 'raw'
+      ? (currentLog.gyroRaw ?? currentLog.gyro)
+      : currentLog.gyro;
+
     return computeMultiAxisFft(
-      currentLog.gyro,
+      gyroSeries,
       currentLog.acc,
       currentLog.sampleRateHz,
       startIdx,
       endIdx,
       1024
     );
-  }, [currentLog, selectedWindow, logTooShort]);
+  }, [currentLog, selectedWindow, logTooShort, gyroSource, gyroSourceLogged]);
 
   // Compute Overall Vibration Summary
 
@@ -322,9 +350,16 @@ export default function App() {
                 onHeadSpeedRpmChange={handleHeadSpeedRpmChange}
                 maxFreqRange={maxFreqRange}
                 onMaxFreqRangeChange={setMaxFreqRange}
+                gyroSource={gyroSource}
+                onGyroSourceChange={setGyroSource}
+                gyroSourceAvailable={gyroSourceAvailable}
                 analysisNotice={
                   logTooShort
                     ? `비행 기록 ${currentLog.durationSec.toFixed(1)}초 — 최소 ${MIN_ANALYSIS_SEC}초가 못 되어 분석하지 않습니다.`
+                    : !gyroSourceLogged
+                    ? `선택한 데이터 ${
+                        gyroSource === 'raw' ? 'Raw Gyro (gyroRAW)' : 'Filtered Gyro (gyroADC)'
+                      }가 이 로그에 기록되어 있지 않습니다.`
                     : null
                 }
               />

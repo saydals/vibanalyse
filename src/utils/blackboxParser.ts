@@ -691,6 +691,15 @@ export function parseCsvOrTextLog(text: string, fileName: string): BlackboxLog[]
   const rollIdx = findCol('gyroADC[0]', 'gyro_roll', 'roll');
   const pitchIdx = findCol('gyroADC[1]', 'gyro_pitch', 'pitch');
   const yawIdx = findCol('gyroADC[2]', 'gyro_yaw', 'yaw');
+  const rawRollIdx = findCol('gyroRAW[0]');
+  const rawPitchIdx = findCol('gyroRAW[1]');
+  const rawYawIdx = findCol('gyroRAW[2]');
+  const hasGyroFilteredField = rollIdx >= 0 || pitchIdx >= 0 || yawIdx >= 0;
+  const hasGyroRawField = rawRollIdx >= 0 || rawPitchIdx >= 0 || rawYawIdx >= 0;
+  // gyroADC 컬럼이 없는 CSV는 gyroRAW 컬럼으로 대체 → 최소 1개 소스는 제공
+  const effRollIdx = hasGyroFilteredField ? rollIdx : rawRollIdx;
+  const effPitchIdx = hasGyroFilteredField ? pitchIdx : rawPitchIdx;
+  const effYawIdx = hasGyroFilteredField ? yawIdx : rawYawIdx;
   const accXIdx = findCol('accSmooth[0]', 'accADC[0]', 'acc_x');
   const accYIdx = findCol('accSmooth[1]', 'accADC[1]', 'acc_y');
   const accZIdx = findCol('accSmooth[2]', 'accADC[2]', 'acc_z');
@@ -704,6 +713,9 @@ export function parseCsvOrTextLog(text: string, fileName: string): BlackboxLog[]
   const roll: number[] = [];
   const pitch: number[] = [];
   const yaw: number[] = [];
+  const rawRoll: number[] = [];
+  const rawPitch: number[] = [];
+  const rawYaw: number[] = [];
   const accX: number[] = [];
   const accY: number[] = [];
   const accZ: number[] = [];
@@ -727,9 +739,14 @@ export function parseCsvOrTextLog(text: string, fileName: string): BlackboxLog[]
     let t = timeIdx >= 0 ? num(timeIdx) : time.length * 0.001;
     if (timeIsMs) t = t / 1000;
     time.push(t);
-    roll.push(rollIdx >= 0 ? num(rollIdx) : 0);
-    pitch.push(pitchIdx >= 0 ? num(pitchIdx) : 0);
-    yaw.push(yawIdx >= 0 ? num(yawIdx) : 0);
+    roll.push(effRollIdx >= 0 ? num(effRollIdx) : 0);
+    pitch.push(effPitchIdx >= 0 ? num(effPitchIdx) : 0);
+    yaw.push(effYawIdx >= 0 ? num(effYawIdx) : 0);
+    if (hasGyroRawField) {
+      rawRoll.push(rawRollIdx >= 0 ? num(rawRollIdx) : 0);
+      rawPitch.push(rawPitchIdx >= 0 ? num(rawPitchIdx) : 0);
+      rawYaw.push(rawYawIdx >= 0 ? num(rawYawIdx) : 0);
+    }
     accX.push(accXIdx >= 0 ? num(accXIdx) / acc1G : 0);
     accY.push(accYIdx >= 0 ? num(accYIdx) / acc1G : 0);
     accZ.push(accZIdx >= 0 ? num(accZIdx) / acc1G : 0);
@@ -765,6 +782,11 @@ export function parseCsvOrTextLog(text: string, fileName: string): BlackboxLog[]
     headers, fieldNames: headerLines,
     time: Float32Array.from(time),
     gyro: { roll: Float32Array.from(roll), pitch: Float32Array.from(pitch), yaw: Float32Array.from(yaw) },
+    gyroRaw: hasGyroRawField && rawRoll.length > 0
+      ? { roll: Float32Array.from(rawRoll), pitch: Float32Array.from(rawPitch), yaw: Float32Array.from(rawYaw) }
+      : undefined,
+    hasGyroFiltered: hasGyroFilteredField,
+    hasGyroRaw: hasGyroRawField,
     acc: { x: Float32Array.from(accX), y: Float32Array.from(accY), z: Float32Array.from(accZ) },
     rpm: rpmA.length > 0 ? Float32Array.from(rpmA) : undefined,
     rpmSource: hasRpmSensor ? 'sensor' : 'none',
@@ -788,12 +810,15 @@ export function hasRpmSensorData(log: Pick<import('../types/blackbox').BlackboxL
  * Parse Binary .BBL file — reference port (multi-log aware).
  */
 function buildBlackboxLog(parsed: ParsedLogData, fileName: string, id: number): BlackboxLog {
-  const { headers, sysConfig, frameDefs, samples, events } = parsed;
+  const { headers, sysConfig, frameDefs, samples, events, hasGyroFilteredField, hasGyroRawField } = parsed;
   const n = samples.length;
   const time = new Float32Array(n);
   const roll = new Float32Array(n);
   const pitch = new Float32Array(n);
   const yaw = new Float32Array(n);
+  const rawRoll = hasGyroRawField ? new Float32Array(n) : null;
+  const rawPitch = hasGyroRawField ? new Float32Array(n) : null;
+  const rawYaw = hasGyroRawField ? new Float32Array(n) : null;
   const accX = new Float32Array(n);
   const accY = new Float32Array(n);
   const accZ = new Float32Array(n);
@@ -808,6 +833,9 @@ function buildBlackboxLog(parsed: ParsedLogData, fileName: string, id: number): 
     const s = samples[i];
     time[i] = (s.timeUs - t0) / 1000000;
     roll[i] = s.gyro[0]; pitch[i] = s.gyro[1]; yaw[i] = s.gyro[2];
+    if (s.gyroRaw && rawRoll && rawPitch && rawYaw) {
+      rawRoll[i] = s.gyroRaw[0]; rawPitch[i] = s.gyroRaw[1]; rawYaw[i] = s.gyroRaw[2];
+    }
     accX[i] = s.acc[0]; accY[i] = s.acc[1]; accZ[i] = s.acc[2];
     if (s.headspeed > 0) { rpm[i] = s.headspeed; hasRpm = true; }
     if (s.tailspeed > 0) { tailRpmArr[i] = s.tailspeed; hasTail = true; }
@@ -841,6 +869,9 @@ function buildBlackboxLog(parsed: ParsedLogData, fileName: string, id: number): 
     looptimeUs: sysConfig.looptimeUs, sampleRateHz, durationSec, totalFrames: n,
     headers, fieldNames, time,
     gyro: { roll, pitch, yaw }, acc: { x: accX, y: accY, z: accZ },
+    gyroRaw: rawRoll && rawPitch && rawYaw ? { roll: rawRoll, pitch: rawPitch, yaw: rawYaw } : undefined,
+    hasGyroFiltered: hasGyroFilteredField,
+    hasGyroRaw: hasGyroRawField,
     rpm: hasRpm ? rpm : undefined,
     rpmSource: hasRpm || hasHeadspeedField ? 'sensor' : 'none',
     tailRpm: hasTail ? tailRpmArr : undefined,
@@ -885,6 +916,8 @@ export function parseBinaryBbl(bytes: Uint8Array, fileName: string): BlackboxLog
 interface MainSample {
   timeUs: number; iteration: number;
   gyro: [number, number, number]; acc: [number, number, number];
+  /** gyroRAW (미필터) — 해당 필드가 없으면 null */
+  gyroRaw: [number, number, number] | null;
   headspeed: number; tailspeed: number; motor: number;
   vbat: number; amperage: number; throttle: number;
 }
@@ -892,6 +925,10 @@ interface ParsedLogData {
   headers: Record<string, string>; sysConfig: SysConfig;
   frameDefs: Record<string, FrameDef>; samples: MainSample[];
   events: { timeUs: number; name: string; data?: string }[];
+  /** gyroADC[n] (필터 통과) 필드가 BBL에 기록되어 있는지 */
+  hasGyroFilteredField: boolean;
+  /** gyroRAW[n] (미필터) 필드가 BBL에 기록되어 있는지 */
+  hasGyroRawField: boolean;
 }
 
 function applyHeaderField(
@@ -1027,7 +1064,13 @@ function parseSingleBinaryLog(bytes: Uint8Array, logStart: number, logEnd: numbe
   let gpsHome1: number[] | null = null;
   const idxTime = 1, idxIter = 0;
   const fidx = (n: string): number => defI.nameToIndex[n] ?? -1;
-  const iGyro = [fidx('gyroADC[0]'), fidx('gyroADC[1]'), fidx('gyroADC[2]')];
+  const iGyroF = [fidx('gyroADC[0]'), fidx('gyroADC[1]'), fidx('gyroADC[2]')];
+  const iGyroR = [fidx('gyroRAW[0]'), fidx('gyroRAW[1]'), fidx('gyroRAW[2]')];
+  // Rotorflight: gyroADC = gyroADCf (자이로 필터 통과), gyroRAW = gyroADCd (필터 전 raw)
+  const hasGyroFilteredField = iGyroF[0] >= 0;
+  const hasGyroRawField = iGyroR[0] >= 0;
+  // gyroADC 필드가 없는 로그(일부 구버전/디버그 설정)는 gyroRAW로 대체 → 최소 1개 소스는 제공
+  const iGyro = hasGyroFilteredField ? iGyroF : iGyroR;
   const iAcc = [fidx('accSmooth[0]'), fidx('accSmooth[1]'), fidx('accSmooth[2]')];
   const iAccAlt = [fidx('accADC[0]'), fidx('accADC[1]'), fidx('accADC[2]')];
   const iHead = fidx('headspeed');
@@ -1041,6 +1084,9 @@ function parseSingleBinaryLog(bytes: Uint8Array, logStart: number, logEnd: numbe
     const g = (k: number): number => {
       const fi = iGyro[k]; return fi >= 0 ? frame[fi] * sys.gyroScale : 0;
     };
+    const gr = (k: number): number => {
+      const fi = iGyroR[k]; return fi >= 0 ? frame[fi] * sys.gyroScale : 0;
+    };
     const a = (k: number): number => {
       const fi = useAltAcc ? iAccAlt[k] : iAcc[k];
       return fi >= 0 ? frame[fi] / sys.acc1G : 0;
@@ -1048,6 +1094,7 @@ function parseSingleBinaryLog(bytes: Uint8Array, logStart: number, logEnd: numbe
     samples.push({
       timeUs: frame[idxTime], iteration: frame[idxIter],
       gyro: [g(0), g(1), g(2)], acc: [a(0), a(1), a(2)],
+      gyroRaw: hasGyroRawField ? [gr(0), gr(1), gr(2)] : null,
       headspeed: iHead >= 0 ? frame[iHead] : 0,
       tailspeed: iTail >= 0 ? frame[iTail] : 0,
       motor: iMotor >= 0 ? frame[iMotor] : 0,
@@ -1205,7 +1252,7 @@ function parseSingleBinaryLog(bytes: Uint8Array, logStart: number, logEnd: numbe
   }
   if (pendingType) finishPending(-1);
   if (samples.length === 0) return null;
-  return { headers, sysConfig: sys, frameDefs, samples, events };
+  return { headers, sysConfig: sys, frameDefs, samples, events, hasGyroFilteredField, hasGyroRawField };
 }
 
 export function analyzeVibrations(

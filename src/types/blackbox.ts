@@ -23,6 +23,16 @@ export interface BlackboxLog {
     pitch: Float32Array; // deg/s
     yaw: Float32Array;   // deg/s
   };
+  /** gyroRAW (미필터) — BBL에 로깅된 경우만 존재. 없으면 undefined */
+  gyroRaw?: {
+    roll: Float32Array;  // deg/s
+    pitch: Float32Array; // deg/s
+    yaw: Float32Array;   // deg/s
+  };
+  /** gyroADC[n] (필터 통과 자이로) 필드가 로그에 기록되어 있는지 */
+  hasGyroFiltered: boolean;
+  /** gyroRAW[n] (미필터 자이로) 필드가 로그에 기록되어 있는지 */
+  hasGyroRaw: boolean;
   acc: {
     x: Float32Array; // G
     y: Float32Array; // G
